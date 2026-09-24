@@ -68,19 +68,16 @@ def parse_attributes(content: str) -> tuple[dict[str, Any] | None, str | None, s
     if not isinstance(attributes, dict):
         return None, "JSON 顶层对象不是 dict", source, candidate
     if not set(attributes).intersection(REQUIRED_ATTRIBUTE_KEYS):
-        return None, "JSON 至少需要包含四个属性键中的一个", None, None
+        return None, "JSON 至少需要包含四个属性键中的一个", source, candidate
     if any(key not in REQUIRED_ATTRIBUTE_KEYS for key in attributes):
-        return None, "JSON 包含未知属性键", None, None
+        return None, "JSON 包含未知属性键", source, candidate
+    if any(not isinstance(value, list) for value in attributes.values()):
+        return None, "JSON 属性值不是 list", source, candidate
     if any(
-            not isinstance(attributes[key], list)
-            for key in attributes
+            not all(isinstance(item, str) for item in value)
+            for value in attributes.values()
     ):
-        return None, "JSON 属性值不是 list", None, None
-    if any(
-            not all(isinstance(value, str) for value in attributes[key])
-            for key in attributes
-    ):
-        return None, "JSON 属性数组必须只包含字符串", None, None
+        return None, "JSON 属性数组必须只包含字符串", source, candidate
     return attributes, None, source, candidate
 
 
@@ -128,9 +125,7 @@ def build_success_result(
         "status": "success",
         "generation_failed": False,
         "json_parse_failed": False,
-        # result.update({"attributes": attributes})
-        # 当前实验主要关注原始输出、置信度和PPL；attributes保留上面的解析结果，
-        # 后续如需直接使用结构化属性时再恢复保存。
+        "attributes": attributes,
         "error": None,
     })
     return result

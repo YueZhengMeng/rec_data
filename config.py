@@ -38,17 +38,17 @@ LOCAL_CONFIG = {
     "device": "cuda",
     "enable_thinking": False,
     "max_new_tokens": 1024,
-    "temperature": 0.6,
-    "top_p": 0.95,
+    "temperature": 0.7,
+    "top_p": 0.8,
     "top_k": 20,
     "min_p": 0.0,
-    "presence_penalty": 0.0,
+    "presence_penalty": 1.5,
     "repetition_penalty": 1.0,
     # 生成时逐步累计置信度，默认只保存平均值和PPL，减少结果文件大小。
     "record_token_confidences": False,
     # 每张 GPU 的 batch size；多卡等效 batch size = batch_size × GPU进程数。
     "batch_size": 1,
-    "result_file": os.path.join(os.path.dirname(__file__), "exp", "exp_local_qwen35", "result.json"),
+    "result_file": os.path.join(os.path.dirname(__file__), "exp", "exp_local_qwen35_2", "result.json"),
 }
 
 EXP_PATH_PREFIX = "exp"

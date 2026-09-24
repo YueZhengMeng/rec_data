@@ -232,7 +232,7 @@ class AttributesExtractorTests(unittest.IsolatedAsyncioTestCase):
         prompt = next(block["text"] for block in content_blocks if block["type"] == "text")
         self.assertIn("Image 2 (Context)", prompt)
         self.assertIn("Image 3 (Fine)", prompt)
-        self.assertIn("not part of the scene", prompt)
+        self.assertIn("not part of the original image", prompt)
 
 
 if __name__ == "__main__":

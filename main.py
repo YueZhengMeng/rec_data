@@ -27,11 +27,15 @@ async def extract_attributes(instance_data):
         return instance_id, False
 
     # 解析结果
-    required_keys = ["appearance", "action", "location", "relation"]
-    attributes_extract_result = match_json(attributes_extractor_content, required_keys)
+    allowed_keys = {"appearance", "action", "location", "relation"}
+    attributes_extract_result = match_json(attributes_extractor_content)
 
     if (not isinstance(attributes_extract_result, dict)
-            or any(not isinstance(attributes_extract_result.get(key), list) for key in required_keys)):
+            or not allowed_keys.intersection(attributes_extract_result)
+            or any(key not in allowed_keys for key in attributes_extract_result)
+            or any(not isinstance(value, list)
+                   or any(not isinstance(item, str) for item in value)
+                   for value in attributes_extract_result.values())):
         print(f"❌ 数据 {instance_id} 解析失败，放弃")
         return instance_id, False
 

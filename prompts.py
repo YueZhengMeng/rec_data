@@ -2,23 +2,21 @@
 # 避免两个入口分别维护后出现图片含义或输出格式不一致。
 EXTRACT_ATTRIBUTES_PROMPT = """
 You are given three views of the same annotated target instance:
-* Image 1 (Global): the full image, providing scene context and spatial relations. The same semi-transparent orange ring/crosshair marks the annotated target point at a larger scale, which is not part of the scene.
-* Image 2 (Context): an crop covering the target and its surroundings. The same marker marks the exact annotated target point at a smaller scale, which is not part of the scene.
-* Image 3 (Fine): a smaller crop without a marker, providing local appearance, pose, and action details.
+* Image 1 (Global): the full image for scene context and spatial relations.
+* Image 2 (Context): a crop showing the target and its surroundings.
+* Image 3 (Fine): a smaller, unmarked crop for local visual details.
+A semi-transparent red marker in Images 1 and 2 points to the target instance; it is not part of the original image.
 
-Use all three views together to identify the target whose center corresponds to the marker in Image 2. Produce one fused answer, not separate answers for each image.
 The target object's **category** and some **known attributes/context** are provided below. Use them together with the images to identify the correct instance.
 Your task is to extract **additional, visually observable attributes** of this specific instance. Do not simply repeat the known attributes.
+Produce one fused answer, not separate answers for each image. Do not describe a neighboring instance.
+
 Pay particular attention to:
-* appearance: color, clothing, accessories, shape, material, pattern, etc.
-* action/state: walking, sitting, standing, holding something, etc.
-* location: top shelf, bottom shelf, near the entrance, inside a box, etc.
-* relation: beside a car, next to another object, in the upper-right corner of a box, etc.
+<|>Category Guidance Here<|>
 
-Only include attributes that are clearly visible. Do not hallucinate.
+The target may be partially occluded; therefore, only include clearly visible, useful features; omit uncertain details, do not guess material, intent, or motion from a still image, and do not try to fill every field.
 
-You MUST respond with ONLY a single valid JSON object and NOTHING ELSE.
-The response must be either raw JSON or a ```json fenced block, and the JSON content MUST be directly parseable by JSON.parse.
+Return exactly one JSON object—raw JSON or a single ```json fenced block—and NOTHING ELSE. The root/top-level output MUST be a single JSON object ({...}), not an array. Use one or more of these keys only: appearance, action, location, relation. You may omit fields without clear attributes or use []; each included value must be a list of strings.
 Format example:
 ```json
 {
@@ -34,11 +32,35 @@ Category: <|>Category Here<|>
 Known attributes/context: <|>Known Attributes Here<|>
 """
 
+CATEGORY_GUIDANCE = {
+    "person": """
+* appearance: visible clothing, hair, or accessories.
+* action: clear pose or action, such as standing, sitting, or holding an object.
+* location: where the person is in the scene, such as by a doorway.
+* relation: a clear spatial or physical interaction with another visible instance, such as beside a car.
+""",
+    "car": """
+* appearance: visible color, body shape, and which way the car faces, if clear.
+* action: a clearly visible state, such as parked, an open door; otherwise leave empty.
+* location: where the car is in the scene, such as in a lane or parking space.
+* relation: its clear position relative to another visible instance, such as beside another car.
+""",
+}
+
+OTHER_GUIDANCE = """
+* appearance: visible color, shape, texture, or clearly identifiable material.
+* action: clear pose or action for animals, or an obvious state for other objects; otherwise leave empty.
+* location: where the target is in the scene, such as on a shelf or inside a box.
+* relation: its clear position relative to another visible instance, such as beside a cup.
+"""
+
 
 def build_extract_attributes_prompt(category, attributes, prompt=EXTRACT_ATTRIBUTES_PROMPT):
-    """填充类别和已知属性，返回在线/本地推理共用的文本提示词。"""
+    """填充类别、已知属性和简短的类别引导，供在线/本地推理共用。"""
+    guidance = CATEGORY_GUIDANCE.get(str(category).strip().lower(), OTHER_GUIDANCE).strip()
     return (prompt.replace("<|>Category Here<|>", str(category))
-            .replace("<|>Known Attributes Here<|>", str(attributes)).strip())
+            .replace("<|>Known Attributes Here<|>", str(attributes))
+            .replace("<|>Category Guidance Here<|>", guidance).strip())
 
 
 def build_extract_attributes_messages(

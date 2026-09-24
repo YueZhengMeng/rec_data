@@ -13,7 +13,7 @@ from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndByte
 from transformers.generation.logits_process import LogitsProcessor, LogitsProcessorList
 
 from crop import AdaptiveCropper
-from prompts import EXTRACT_ATTRIBUTES_PROMPT, build_extract_attributes_prompt
+from prompts import build_extract_attributes_prompt
 
 
 class PresencePenaltyLogitsProcessor(LogitsProcessor):
@@ -153,11 +153,11 @@ class LocalAttributesExtractor:
             enable_thinking: bool = False,
             max_new_tokens: int = 1024,
             do_sample: bool = True,
-            temperature: float = 0.6,
-            top_p: float = 0.95,
+            temperature: float = 0.7,
+            top_p: float = 0.8,
             top_k: int = 20,
             min_p: float = 0.0,
-            presence_penalty: float = 0.0,
+            presence_penalty: float = 1.5,
             repetition_penalty: float = 1.0,
             record_token_confidences: bool = False,
     ):
@@ -274,7 +274,6 @@ class LocalAttributesExtractor:
         text_prompt = build_extract_attributes_prompt(
             instance_data["category"],
             instance_data.get("attributes", ""),
-            EXTRACT_ATTRIBUTES_PROMPT,
         )
         # Qwen3.5 的 processor 识别 type=image 且 image 为 PIL.Image 的输入。
         content = [
