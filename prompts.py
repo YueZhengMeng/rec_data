@@ -16,7 +16,7 @@ Pay particular attention to:
 
 The target may be partially occluded; therefore, only include clearly visible, useful features; omit uncertain details, do not guess material, intent, or motion from a still image, and do not try to fill every field.
 
-Return exactly one JSON object—raw JSON or a single ```json fenced block—and NOTHING ELSE. The root/top-level output MUST be a single JSON object ({...}), not an array. Use one or more of these keys only: appearance, action, location, relation. You may omit fields without clear attributes or use []; each included value must be a list of strings.
+Return exactly one JSON object—raw JSON or a single ```json fenced block—and NOTHING ELSE. The root/top-level output MUST be a single JSON object ({...}), not an array. Use one or more of these keys only: appearance, action, location, relation. You may omit fields without clear attributes or use []; each included value must be a list of strings, even if there is only one item.
 Format example:
 ```json
 {

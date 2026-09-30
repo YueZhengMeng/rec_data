@@ -54,7 +54,7 @@ LOCAL_CONFIG = {
 EXP_PATH_PREFIX = "exp"
 
 #  实验名称
-EXP_NAME = f"exp_0910"
+EXP_NAME = f"exp_0928"
 # 获取当前时间，精确到秒
 # EXP_NAME = time.strftime("%Y%m%d%H%M%S", time.localtime())
 
