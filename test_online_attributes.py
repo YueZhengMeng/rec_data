@@ -40,7 +40,7 @@ class OnlineAttributesTests(unittest.IsolatedAsyncioTestCase):
                     if expected_success:
                         self.assertEqual(saved[0]["attributes"],
                                          json.loads(content.replace("```json", "")
-                                                   .replace("```", "").strip()))
+                                                    .replace("```", "").strip()))
 
 
 if __name__ == "__main__":

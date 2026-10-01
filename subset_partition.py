@@ -283,6 +283,7 @@ def report_cross_caption_attribute_matches(records: list[dict[str, Any]], encode
                         print(
                             f"⚠️ 同图跨 caption 属性重复：image_idx={record['image_idx']}，"
                             f"instance_id={record['instance_id']}，caption_idx={record['caption_idx']}，"
+                            f"原 attributes={record['attributes']!r}，"
                             f"more_attributes.{entry['field']}={entry['phrase']!r} 与 "
                             f"caption_idx={other_caption_idx} 的 attributes={original_phrase!r}，"
                             f"cosine={_cosine(vectors[entry['text']], vectors[original_phrase]):.4f}"
@@ -377,127 +378,167 @@ def _stable_id(prefix: str, payload: Any) -> str:
     return prefix + hashlib.sha1(encoded.encode("utf-8")).hexdigest()[:16]
 
 
-def build_subset_tree(records: list[dict[str, Any]], encoder: Any,
-                      similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
-                      min_subset_size: int = DEFAULT_MIN_SUBSET_SIZE,
-                      max_condition_depth: int = DEFAULT_MAX_CONDITION_DEPTH,
-                      vectors: dict[str, tuple[float, ...]] | None = None) -> dict[str, Any]:
-    # 这里仅检查运行参数，避免组合深度或阈值写错后产生不可解释的结果；
-    # 不再重复检查 records 的字段、类型或实例 ID。
-    if min_subset_size < 1:
-        raise ValueError("min_subset_size 必须至少为 1")
-    if max_condition_depth < 1:
-        raise ValueError("max_condition_depth 必须至少为 1")
-    if not 0.0 <= similarity_threshold <= 1.0:
-        raise ValueError("similarity_threshold 必须在 [0, 1] 范围内")
-    if not records:
-        raise ValueError("caption 根集合不能为空")
-
+def _root_node(records: list[dict[str, Any]]) -> dict[str, Any]:
     root_key = [records[0]["image_name"], records[0]["category"], records[0]["caption"]]
-    # records 已按该 key 分组；这里直接读取第一条作为根的元数据。
-
-    instance_ids = [row["instance_id"] for row in records]
-    root_id = _stable_id("caption_", root_key)
-    # 根节点保存原始 caption 的完整实例集合。它不是训练目标，而是后续
-    # 所有细粒度分支的父集合；点坐标直接从输入记录拷贝，不由语义推断。
-    root_node = {
-        "node_id": root_id,
+    return {
+        "node_id": _stable_id("caption_", root_key),
         "node_type": "caption_root",
         "parent_ids": [],
         "image_name": root_key[0],
         "category": root_key[1],
         "caption": root_key[2],
         "support_count": len(records),
-        "instance_ids": instance_ids,
+        "instance_ids": [row["instance_id"] for row in records],
         "points": [row["point"] for row in records],
         "conditions": [],
         "condition_paths": [],
     }
-    conditions = cluster_conditions(records, encoder, similarity_threshold, vectors)
-    # 整个根集合的条件没有划分作用；同时过滤掉小于最小支持数的条件。
-    eligible = [condition for condition in conditions if min_subset_size <= condition.support < len(records)]
-
-    # Membership masks are local to this caption root. Search exhaustively up
-    # to the requested depth and prune a branch once its support is too small.
-    nodes_by_mask: dict[int, dict[str, Any]] = {}
-    for selected, mask in _enumerate_condition_sets(
-            eligible, min_subset_size, max_condition_depth):
-        support = mask.bit_count()
-        node = nodes_by_mask.get(mask)
-        # 同一 mask 的多个条件组合代表同一个真实点集，因此合并为一个节点，
-        # 但通过 condition_paths 保留所有得到该点集的语义路径。
-        if node is None:
-            member_indices = [index for index in range(len(records)) if mask & (1 << index)]
-            node = {
-                "node_id": _stable_id("subset_", [root_id, [instance_ids[index] for index in member_indices]]),
-                "node_type": "attribute_subset",
-                "parent_ids": [],
-                "image_name": root_key[0],
-                "category": root_key[1],
-                "caption": root_key[2],
-                "support_count": support,
-                "instance_ids": [instance_ids[index] for index in member_indices],
-                "points": [records[index]["point"] for index in member_indices],
-                "conditions": [],
-                "condition_paths": [],
-            }
-            nodes_by_mask[mask] = node
-        # path 记录组合中的完整条件，conditions 则提供该节点的去重条件清单。
-        node["condition_paths"].append([{
-            "condition_id": item.condition_id,
-            "field": item.field,
-            "source_fields": list(item.source_fields),
-            "canonical_phrase": item.display,
-            "source_phrases": list(item.phrases),
-        } for item in selected])
-        for item in selected:
-            if all(existing["condition_id"] != item.condition_id for existing in node["conditions"]):
-                node["conditions"].append({
-                    "condition_id": item.condition_id,
-                    "field": item.field,
-                    "source_fields": list(item.source_fields),
-                    "canonical_phrase": item.display,
-                    "source_phrases": list(item.phrases),
-                })
-        if len(selected) > 1:
-            # 当前组合的父节点取“去掉最后一个条件”的交集；由于枚举按深度
-            # 递增，父节点通常已经创建。若该父集与当前集相同，则不建立自环。
-            parent_mask = selected[0].support_mask
-            for condition in selected[1:-1]:
-                parent_mask &= condition.support_mask
-            parent_node = nodes_by_mask.get(parent_mask)
-            if parent_node and parent_node["node_id"] != node["node_id"]:
-                if parent_node["node_id"] not in node["parent_ids"]:
-                    node["parent_ids"].append(parent_node["node_id"])
-
-    nodes = [root_node]
-    nodes.extend(sorted(nodes_by_mask.values(), key=lambda item: (
-        item["support_count"], item["instance_ids"], item["node_id"]
-    )))
-    return {"root_id": root_id, "nodes": nodes}
 
 
-def _enumerate_condition_sets(conditions: list[Condition], min_support: int,
-                              max_depth: int) -> Iterator[tuple[list[Condition], int]]:
-    """深度优先穷举条件交集，并利用支持数的单调性剪枝。
+@dataclass(frozen=True)
+class _CandidatePath:
+    mask: int
+    parent_mask: int
+    conditions: tuple[Condition, ...]
 
-    一旦某个交集的实例数低于 min_support，再加入条件只会让集合更小，
-    因此该分支不可能恢复为有效子集，可以立即停止展开。
-    """
+    @property
+    def additional_depth(self) -> int:
+        """Number of generated attributes in this path (original attributes do not count)."""
+        return sum(item.field == "more_attributes" for item in self.conditions)
 
-    def visit(start: int, selected: list[Condition], mask: int | None):
-        if selected:
-            yield selected, mask
-        if len(selected) >= max_depth:
+
+def _candidate_paths(records: list[dict[str, Any]], encoder: Any,
+                     similarity_threshold: float, min_subset_size: int,
+                     max_condition_depth: int,
+                     vectors: dict[str, tuple[float, ...]] | None) -> dict[int, dict[int, list[_CandidatePath]]]:
+    """Enumerate genuine refinements, counting only additional attributes."""
+    conditions = [item for item in cluster_conditions(records, encoder, similarity_threshold, vectors)
+                  if min_subset_size <= item.support < len(records)]
+    full_mask = (1 << len(records)) - 1
+    candidates: dict[int, dict[int, list[_CandidatePath]]] = defaultdict(lambda: defaultdict(list))
+
+    def visit(start: int, selected: tuple[Condition, ...], parent_mask: int) -> None:
+        if sum(item.field == "more_attributes" for item in selected) >= max_condition_depth:
             return
         for index in range(start, len(conditions)):
             condition = conditions[index]
-            next_mask = condition.support_mask if mask is None else mask & condition.support_mask
-            if next_mask.bit_count() < min_support:
+            mask = parent_mask & condition.support_mask
+            if mask == parent_mask or mask.bit_count() < min_subset_size:
                 continue
-            yield from visit(index + 1, selected + [condition], next_mask)
+            path = _CandidatePath(mask, parent_mask, selected + (condition,))
+            candidates[path.additional_depth][mask].append(path)
+            visit(index + 1, path.conditions, mask)
 
-    yield from visit(0, [], None)
+    visit(0, (), full_mask)
+    return candidates
+
+
+def _node_from_path(records: list[dict[str, Any]], root_id: str,
+                    path: _CandidatePath, parent_id: str) -> dict[str, Any]:
+    indices = [index for index in range(len(records)) if path.mask & (1 << index)]
+    instance_ids = [records[index]["instance_id"] for index in indices]
+    descriptions = [{
+        "condition_id": item.condition_id,
+        "field": item.field,
+        "source_fields": list(item.source_fields),
+        "canonical_phrase": item.display,
+        "source_phrases": list(item.phrases),
+    } for item in path.conditions]
+    return {
+        "node_id": _stable_id("subset_", [root_id, instance_ids]),
+        "node_type": "attribute_subset",
+        "parent_ids": [parent_id],
+        "image_name": records[0]["image_name"],
+        "category": records[0]["category"],
+        "caption": records[0]["caption"],
+        "support_count": len(indices),
+        "instance_ids": instance_ids,
+        "points": [records[index]["point"] for index in indices],
+        "conditions": descriptions,
+        "condition_paths": [descriptions],
+    }
+
+
+def _select_image_trees(groups: list[list[dict[str, Any]]], encoder: Any,
+                        similarity_threshold: float, min_subset_size: int,
+                        max_condition_depth: int,
+                        vectors: dict[str, tuple[float, ...]] | None = None
+                        ) -> list[dict[str, Any]]:
+    """Select whole, non-overlapping subsets across all captions at each depth."""
+    if min_subset_size < 1 or max_condition_depth < 1:
+        raise ValueError("min_subset_size and max_condition_depth must be at least 1")
+    if not 0.0 <= similarity_threshold <= 1.0:
+        raise ValueError("similarity_threshold must be in [0, 1]")
+    if not groups or any(not group for group in groups):
+        raise ValueError("caption groups must not be empty")
+
+    trees = []
+    paths_by_group = []
+    root_points: dict[tuple[float, float], int] = {}
+    root_instances: dict[Any, int] = {}
+    for group_index, group in enumerate(groups):
+        root = _root_node(group)
+        for record in group:
+            point = tuple(record["point"])
+            instance_id = record["instance_id"]
+            if ((point in root_points and root_points[point] != group_index)
+                    or (instance_id in root_instances and root_instances[instance_id] != group_index)):
+                raise ValueError(f"同图不同 caption 的原始标注存在重合: {root['image_name']} / {root['caption']}")
+            root_points[point] = root_instances[instance_id] = group_index
+        trees.append({"root_id": root["node_id"], "nodes": [root]})
+        paths_by_group.append(_candidate_paths(
+            group, encoder, similarity_threshold, min_subset_size, max_condition_depth, vectors
+        ))
+
+    selected_masks = [{(1 << len(group)) - 1: tree["root_id"]}
+                      for group, tree in zip(groups, trees)]
+    for depth in range(0, max_condition_depth + 1):
+        # Candidates at the same depth compete as complete point sets. Larger
+        # supports win; stable content IDs resolve ties independent of input order.
+        ranked = []
+        for group_index, paths_by_depth in enumerate(paths_by_group):
+            for mask, paths in paths_by_depth.get(depth, {}).items():
+                if mask in selected_masks[group_index]:
+                    continue  # a shallower layer already represents this point set
+                ranked.append((-mask.bit_count(), trees[group_index]["root_id"],
+                               tuple(groups[group_index][i]["instance_id"]
+                                     for i in range(len(groups[group_index])) if mask & (1 << i)),
+                               group_index, mask, paths))
+        ranked.sort(key=lambda item: (item[0], item[1], str(item[2]), item[4]))
+        taken_points: set[tuple[float, float]] = set()
+        taken_instances: set[Any] = set()
+        for _, _, _, group_index, mask, paths in ranked:
+            group = groups[group_index]
+            if mask in selected_masks[group_index]:
+                continue
+            viable = [path for path in paths if path.parent_mask in selected_masks[group_index]]
+            if not viable:
+                continue
+            path = min(viable, key=lambda candidate: tuple(
+                (item.display, item.condition_id) for item in candidate.conditions
+            ))
+            members = [group[index] for index in range(len(group)) if mask & (1 << index)]
+            points = {tuple(item["point"]) for item in members}
+            instance_ids = {item["instance_id"] for item in members}
+            if points & taken_points or instance_ids & taken_instances:
+                continue
+            parent_id = selected_masks[group_index][path.parent_mask]
+            node = _node_from_path(group, trees[group_index]["root_id"], path, parent_id)
+            trees[group_index]["nodes"].append(node)
+            selected_masks[group_index][mask] = node["node_id"]
+            taken_points.update(points)
+            taken_instances.update(instance_ids)
+    return trees
+
+
+def build_subset_tree(records: list[dict[str, Any]], encoder: Any,
+                      similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+                      min_subset_size: int = DEFAULT_MIN_SUBSET_SIZE,
+                      max_condition_depth: int = DEFAULT_MAX_CONDITION_DEPTH,
+                      vectors: dict[str, tuple[float, ...]] | None = None) -> dict[str, Any]:
+    """Build one caption's tree (use _select_image_trees for image-wide disjointness)."""
+    return _select_image_trees([records], encoder, similarity_threshold,
+                               min_subset_size, max_condition_depth, vectors)[0]
 
 
 def group_image_records(records: Iterable[dict[str, Any]]) -> Iterator[list[dict[str, Any]]]:
@@ -623,7 +664,7 @@ def run_partition(input_path: str | Path, output_path: str | Path, encoder: Any,
 
     with open(input_path, "r", encoding="utf-8") as file:
         # 输入文件约 298 MB，按当前约定一次性载入。
-        all_records = json.load(file)[:808]
+        all_records = json.load(file)
     image_groups = group_image_records(all_records)
     stats = {"instances": 0, "caption_roots": 0, "subset_nodes": 0, "images": 0}
     data_fd, data_temp_name = tempfile.mkstemp(
@@ -653,17 +694,16 @@ def run_partition(input_path: str | Path, output_path: str | Path, encoder: Any,
                 )
 
                 caption_groups = list(group_caption_records(image_records))
-                trees = []
                 for group in caption_groups:
                     for record in group:
                         record["more_attributes"] = deduplicate_instance_attributes(
                             record, encoder, similarity_threshold, image_vectors
                         )
-                    tree = build_subset_tree(
-                        group, encoder, similarity_threshold,
-                        min_subset_size, max_condition_depth, image_vectors
-                    )
-                    trees.append(tree)
+                trees = _select_image_trees(
+                    caption_groups, encoder, similarity_threshold,
+                    min_subset_size, max_condition_depth, image_vectors
+                )
+                for group, tree in zip(caption_groups, trees):
                     stats["instances"] += len(group)
                     stats["caption_roots"] += 1
                     stats["subset_nodes"] += len(tree["nodes"]) - 1
@@ -741,7 +781,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-subset-size", type=int, default=DEFAULT_MIN_SUBSET_SIZE,
                         help="保留子集的最少实例数")
     parser.add_argument("--max-condition-depth", type=int, default=DEFAULT_MAX_CONDITION_DEPTH,
-                        help="穷举组合条件的最大深度")
+                        help="最多新增 more_attributes 的数量（不包含原始 attribute）")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Qwen3-Embedding 编码 batch size")
     parser.add_argument("--device", default=None, help="模型设备，例如 cpu 或 cuda")
     parser.add_argument("--overwrite", action="store_true", help="允许原子覆盖已存在的输出文件", default=True)

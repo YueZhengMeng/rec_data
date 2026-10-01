@@ -39,15 +39,15 @@ def main():
     from utils import extract_and_parse_json
 
     with open("./exp/exp_local_qwen35_2B/result.json", "r", encoding="utf-8") as f:
-        data_qwen_2b = json.load(f)
+        data_student = json.load(f)
 
-    with open("./exp/exp_local_qwen35_4B/result.json", "r", encoding="utf-8") as f:
-        data_qwen_4b = json.load(f)
+    # with open("./exp/exp_local_qwen35_4B/result.json", "r", encoding="utf-8") as f:
+    #     data_student = json.load(f)
 
     fail_list = []
 
-    for i in tqdm(range(len(data_qwen_4b))):
-        attributes = extract_and_parse_json(data_qwen_4b[i]["content"])
+    for i in tqdm(range(len(data_student))):
+        attributes = extract_and_parse_json(data_student[i]["content"])
         if attributes:
             # attributes 转换回 json 字符串
             attributes_text = json.dumps(attributes)
@@ -67,12 +67,12 @@ def main():
             # 再过一遍格式检查
             attributes, parse_error, _, _ = parse_attributes(attributes_text)
             if attributes:
-                data_qwen_4b[i]["attributes"] = attributes
+                data_student[i]["attributes"] = attributes
             else:
                 print(f"Error processing item {attributes_text}: {parse_error}")
-                fail_list.append(data_qwen_4b[i])
+                fail_list.append(data_student[i])
         else:
-            fail_list.append(data_qwen_4b[i])
+            fail_list.append(data_student[i])
 
     # fail_id_list 会被送去由教师模型标注
     fail_id_list = [item["instance_id"] for item in fail_list]
@@ -80,21 +80,24 @@ def main():
     print(fail_id_list)
 
     # 加载教师模型标注结果
-    with open("./exp/exp_0928/result.json", "r", encoding="utf-8") as f:
+    with open("./exp/exp_all/result.json", "r", encoding="utf-8") as f:
         data_teacher = json.load(f)
 
+    teacher_count = 0
     for item in data_teacher:
-        data_qwen_4b[item["instance_id"]]["attributes"] = item["attributes"]
+        data_student[item["instance_id"]]["attributes"] = item["attributes"]
+        teacher_count += 1
+    print("Teacher Model Annotations Loaded:", teacher_count)
 
-    for i in tqdm(range(len(data_qwen_4b))):
-        assert data_qwen_4b[i]["attributes"] is not None
+    for i in tqdm(range(len(data_student))):
+        assert data_student[i]["attributes"] is not None
         # 预处理并去重后写回属性字典；之后 extract_result.json 中保存的
         # 就是统一形式的短语，不需要下游再重复做字符归一化。
-        for field, values in data_qwen_4b[i]["attributes"].items():
-            data_qwen_4b[i]["attributes"][field] = normalize_and_deduplicate(values)
-        data_qwen_4b[i] = {
-            "instance_id": data_qwen_4b[i]["instance_id"],
-            "more_attributes": data_qwen_4b[i]["attributes"],
+        for field, values in data_student[i]["attributes"].items():
+            data_student[i]["attributes"][field] = normalize_and_deduplicate(values)
+        data_student[i] = {
+            "instance_id": data_student[i]["instance_id"],
+            "more_attributes": data_student[i]["attributes"],
         }
 
     extract_result = []
@@ -102,9 +105,9 @@ def main():
     with open("./anno/instance_data.json", "r", encoding="utf-8") as f:
         instance_data = json.load(f)
 
-    for i in range(len(instance_data)):
-        assert instance_data[i]["instance_id"] == data_qwen_4b[i]["instance_id"]
-        extract_result.append({**instance_data[i], **data_qwen_4b[i]})
+    for i in range(len(data_student)):
+        assert instance_data[i]["instance_id"] == data_student[i]["instance_id"]
+        extract_result.append({**instance_data[i], **data_student[i]})
 
     with open("./anno/extract_result.json", "w", encoding="utf-8") as f:
         json.dump(extract_result, f, ensure_ascii=False, indent=4)

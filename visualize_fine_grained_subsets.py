@@ -18,7 +18,6 @@ Example::
 from __future__ import annotations
 
 import argparse
-import hashlib
 import math
 import os
 import sys
@@ -29,23 +28,19 @@ from typing import Any, Iterable, Mapping
 
 from PIL import Image, ImageDraw, ImageFont
 
-DEFAULT_ANNOTATIONS = Path("anno/fine_grained_subsets.json")
+DEFAULT_ANNOTATIONS = Path("anno/fine_grained_subsets_20.json")
 DEFAULT_IMAGE_DIR = Path("F:/REC-8K/rec-8k")
-DEFAULT_OUTPUT_DIR = Path("show")
+DEFAULT_OUTPUT_DIR = Path("show_20")
 
-# The first eight slots are the validated categorical palette from the project's
-# data-visualization design reference.  More than eight subsets are still
-# distinguishable through the marker shape and the numbered legend row; colors
-# are assigned from a stable subset identity rather than from row position.
+# Fixed, high-contrast review colors.  Unlike a production chart, this review
+# view also uses marker shapes and numbered legend rows, so a larger fixed set
+# makes dense layers easier to inspect without relying on hue alone.
 PALETTE = (
-    (42, 120, 214),  # blue
-    (235, 104, 52),  # orange
-    (27, 175, 122),  # aqua
-    (237, 161, 0),  # yellow
-    (232, 123, 164),  # magenta
-    (0, 131, 0),  # green
-    (74, 58, 167),  # violet
-    (227, 73, 72),  # red
+    (0, 95, 115), (202, 103, 2), (155, 34, 38), (10, 147, 150),
+    (174, 32, 18), (0, 18, 25), (106, 76, 147), (56, 102, 65),
+    (187, 62, 3), (42, 157, 143), (38, 70, 83), (143, 45, 86),
+    (127, 85, 57), (58, 90, 64), (95, 15, 64), (29, 53, 87),
+    (96, 108, 56), (109, 89, 122), (77, 144, 143), (87, 117, 144),
 )
 
 BACKGROUND = (249, 249, 247)
@@ -156,11 +151,29 @@ def group_records_by_layer(records: Iterable[SubsetRecord]) -> dict[int, list[Su
     return dict(sorted(grouped.items()))
 
 
-def _stable_style(identity: str) -> tuple[tuple[int, int, int], str]:
-    digest = hashlib.sha1(identity.encode("utf-8")).digest()
-    color = PALETTE[digest[0] % len(PALETTE)]
-    shape = MARKER_SHAPES[digest[1] % len(MARKER_SHAPES)]
-    return color, shape
+def _style_for_records(records: list[SubsetRecord]) -> dict[str, tuple[tuple[int, int, int], str]]:
+    """Assign distinct palette slots in stable identity order for one layer."""
+    styles = {}
+    ordered = sorted(records, key=lambda record: (record.identity, record.key))
+    for index, record in enumerate(ordered):
+        styles[record.key] = (PALETTE[index % len(PALETTE)],
+                              MARKER_SHAPES[index % len(MARKER_SHAPES)])
+    return styles
+
+
+def _validate_layer_points(image_name: str, layer: int,
+                           records: list[SubsetRecord]) -> None:
+    """Reject stale/invalid overlapping annotations before drawing."""
+    seen: dict[tuple[float, float], str] = {}
+    for record in records:
+        for point in record.points:
+            owner = seen.get(point)
+            if owner is not None and owner != record.key:
+                raise ValueError(
+                    f"{image_name!r} layer {layer} has overlapping subsets at {point}; "
+                    "regenerate fine_grained_subsets.json with subset_partition.py"
+                )
+            seen[point] = record.key
 
 
 def _font_candidates(bold: bool) -> tuple[Path, ...]:
@@ -255,36 +268,6 @@ def _draw_marker(
         draw.rectangle((x - radius, y - arm, x + radius, y + arm), fill=color)
 
 
-def _draw_overlapping_marker(
-        draw: ImageDraw.ImageDraw,
-        center: tuple[float, float],
-        radius: int,
-        colors: list[tuple[int, int, int]],
-) -> None:
-    """Draw membership colors as a ring when several subsets share a point."""
-    x, y = center
-    halo = radius + max(2, radius // 3)
-    draw.ellipse((x - halo, y - halo, x + halo, y + halo), fill=WHITE)
-    outer = radius + 1
-    inner = max(1, radius // 2)
-    # Eight sectors are enough to signal a collision without turning a point
-    # into a solid unreadable blob.  The legend still lists every membership.
-    visible_colors = colors[:8]
-    step = 360.0 / len(visible_colors)
-    for index, color in enumerate(visible_colors):
-        draw.pieslice(
-            (x - outer, y - outer, x + outer, y + outer),
-            start=index * step - 90,
-            end=(index + 1) * step - 90,
-            fill=color,
-        )
-    draw.ellipse((x - inner, y - inner, x + inner, y + inner), fill=WHITE)
-    if len(colors) > 8:
-        # A dark center indicates that the ring is a truncated multi-membership
-        # marker rather than a single black point.
-        draw.ellipse((x - 1, y - 1, x + 1, y + 1), fill=PRIMARY_INK)
-
-
 def _source_path(image_dir: Path, image_name: str) -> Path:
     source = Path(image_name)
     return source if source.is_absolute() else image_dir / source
@@ -315,6 +298,7 @@ def _draw_sidebar(
         width: int,
         height: int,
         *,
+        styles: Mapping[str, tuple[tuple[int, int, int], str]],
         font_path: Path | None = None,
 ) -> None:
     draw = ImageDraw.Draw(canvas)
@@ -327,7 +311,7 @@ def _draw_sidebar(
     draw.rounded_rectangle((x, y, x + width, y + height), radius=12,
                            fill=PANEL_BACKGROUND, outline=GRIDLINE, width=2)
     padding = 18
-    draw.text((x + padding, y + padding), f"Layer {layer} / 层级 {layer}",
+    draw.text((x + padding, y + padding), f"Layer {layer} / layer {layer}",
               fill=PRIMARY_INK, font=header_font)
     description = (
         "original attribute only"
@@ -346,7 +330,7 @@ def _draw_sidebar(
     # Use a compact row for high-cardinality layers, but never omit an entry.
     gap = 8 if len(records) <= 60 else 5 if len(records) <= 150 else 3
     for index, record in enumerate(records, start=1):
-        color, shape = _stable_style(record.identity)
+        color, shape = styles[record.key]
         swatch_center = (x + padding + 10, cursor_y + 11)
         _draw_marker(draw, swatch_center, 7, color, shape)
 
@@ -424,6 +408,8 @@ def render_layer(
     """Render one layer as an RGB review figure."""
     if not records:
         raise ValueError("cannot render an empty layer")
+    _validate_layer_points(image_name, layer, records)
+    styles = _style_for_records(records)
     source = image.convert("RGB")
     displayed, scale = _resize_for_display(source, max_image_width, max_image_height)
     image_width, image_height = displayed.size
@@ -439,10 +425,10 @@ def render_layer(
 
     title_font = load_font(24, bold=True, font_path=font_path)
     subtitle_font = load_font(14, font_path=font_path)
-    draw.text((margin, 15), f"{Path(image_name).name} · layer {layer}",
+    draw.text((margin, 15), f"{Path(image_name).name} - layer {layer}",
               fill=PRIMARY_INK, font=title_font)
     draw.text((margin, 43),
-              "Colored markers identify subsets; a ring means the same point belongs to multiple subsets.",
+              "Each marker belongs to exactly one subset in this layer.",
               fill=SECONDARY_INK, font=subtitle_font)
 
     image_x = margin
@@ -454,8 +440,7 @@ def render_layer(
     canvas.paste(displayed, (image_x, image_y))
     marker_draw = ImageDraw.Draw(canvas)
 
-    # Build memberships first so overlapping annotations are explicit instead
-    # of being silently hidden by whichever record happens to be drawn last.
+    # Points are validated as disjoint above; the map keeps one marker per point.
     point_memberships: dict[tuple[float, float], list[int]] = defaultdict(list)
     for record_index, record in enumerate(records):
         for point in record.points:
@@ -468,17 +453,15 @@ def render_layer(
         if not (-marker_radius <= x <= canvas_width + marker_radius
                 and -marker_radius <= y <= canvas_height + marker_radius):
             continue
-        colors = [_stable_style(records[index].identity)[0] for index in membership_indices]
-        if len(membership_indices) == 1:
-            color, shape = _stable_style(records[membership_indices[0]].identity)
-            _draw_marker(marker_draw, (x, y), marker_radius, color, shape)
-        else:
-            _draw_overlapping_marker(marker_draw, (x, y), marker_radius, colors)
+        record = records[membership_indices[0]]
+        color, shape = styles[record.key]
+        _draw_marker(marker_draw, (x, y), marker_radius, color, shape)
 
     sidebar_x = image_x + image_width + gap
     sidebar_y = title_height
     _draw_sidebar(canvas, records, layer, sidebar_x, sidebar_y, sidebar_width,
-                  canvas_height - sidebar_y - margin, font_path=font_path)
+                  canvas_height - sidebar_y - margin, styles=styles,
+                  font_path=font_path)
     return canvas
 
 
@@ -543,6 +526,7 @@ def generate_visualizations(
         with Image.open(source_path) as source:
             source.load()
             for layer, layer_records in layers.items():
+                _validate_layer_points(image_name, layer, layer_records)
                 figure = render_layer(
                     source,
                     image_name,

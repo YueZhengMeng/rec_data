@@ -7,9 +7,9 @@ CONFIG = {
     "base_url": "https://batch.dashscope.aliyuncs.com/compatible-mode/v1",
     "model_name": "qwen3.8-flash",
     "image_dir": "F:/REC-8K/rec-8k/",
-    "llm_concurrency_limit": 50,
+    "llm_concurrency_limit": 100,
     "llm_max_retries": 3,
-    "process_batch_size": 50,
+    "process_batch_size": 100,
     "crop": {
         "neighbor_k": 5,
         "min_neighbors": 3,
@@ -54,7 +54,7 @@ LOCAL_CONFIG = {
 EXP_PATH_PREFIX = "exp"
 
 #  实验名称
-EXP_NAME = f"exp_0928"
+EXP_NAME = f"exp_all"
 # 获取当前时间，精确到秒
 # EXP_NAME = time.strftime("%Y%m%d%H%M%S", time.localtime())
 
