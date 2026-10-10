@@ -1,13 +1,17 @@
 """Visualize hierarchical REC-8K fine-grained subsets.
 
 For every source image and every available hierarchy depth, this module writes one
-PNG to ``show`` by default.  The left side contains the source image with colored
+PNG to the output directory.  The left side contains the source image with colored
 subset markers; the right side is a compact legend containing ``attribute`` and
 ``more_attributes`` for every subset at that depth.
 
 The annotation file is the annotations-format output produced by
 ``subset_partition.py``.  An entry without ``more_attributes`` is layer 1; an
 entry with *n* additional attributes is layer ``n + 1``.
+
+子集之间允许重叠：同一个点属于多个子集时，标记会绕该点排成一圈，每个标记
+保持完整大小并保留自己的颜色/形状，中心的小点是被标注的实例位置。图例中的
+``partial`` 表示该子集还有 unknown 或未判断的实例，只是已确认的正部分。
 
 Example::
 
@@ -28,9 +32,9 @@ from typing import Any, Iterable, Mapping
 
 from PIL import Image, ImageDraw, ImageFont
 
-DEFAULT_ANNOTATIONS = Path("anno/fine_grained_subsets_20.json")
+DEFAULT_ANNOTATIONS = Path("anno/fine_grained_subsets.json")
 DEFAULT_IMAGE_DIR = Path("F:/REC-8K/rec-8k")
-DEFAULT_OUTPUT_DIR = Path("show_20")
+DEFAULT_OUTPUT_DIR = Path("show_10")
 
 # Fixed, high-contrast review colors.  Unlike a production chart, this review
 # view also uses marker shapes and numbered legend rows, so a larger fixed set
@@ -49,6 +53,8 @@ PRIMARY_INK = (11, 11, 11)
 SECONDARY_INK = (82, 81, 78)
 MUTED_INK = (137, 135, 129)
 GRIDLINE = (225, 224, 217)
+# 多归属标记组外面的浅色圈，帮助区分“同一个实例的两个子集”和“相邻实例”。
+GROUP_RING = (203, 201, 193)
 WHITE = (255, 255, 255)
 
 # Shapes are a secondary encoding for layers with many subsets, where a finite
@@ -66,6 +72,8 @@ class SubsetRecord:
     more_attributes: tuple[str, ...]
     points: tuple[tuple[float, float], ...]
     type_name: str | None = None
+    complete: bool | None = None
+    label_source: str | None = None
 
     @property
     def depth(self) -> int:
@@ -138,6 +146,8 @@ def parse_image_annotations(
                 more_attributes=more_attributes,
                 points=_coerce_points(raw.get("points", ()), image_name=image_name, key=key),
                 type_name=str(raw["type"]) if raw.get("type") is not None else None,
+                complete=raw.get("complete") if isinstance(raw.get("complete"), bool) else None,
+                label_source=str(raw["label_source"]) if raw.get("label_source") else None,
             )
         )
     return records
@@ -161,19 +171,32 @@ def _style_for_records(records: list[SubsetRecord]) -> dict[str, tuple[tuple[int
     return styles
 
 
-def _validate_layer_points(image_name: str, layer: int,
-                           records: list[SubsetRecord]) -> None:
-    """Reject stale/invalid overlapping annotations before drawing."""
-    seen: dict[tuple[float, float], str] = {}
-    for record in records:
+def point_memberships(records: list[SubsetRecord]) -> dict[tuple[float, float], list[int]]:
+    """收集每个点所属的子集下标；同一个点允许属于多个子集。"""
+    memberships: dict[tuple[float, float], list[int]] = defaultdict(list)
+    for record_index, record in enumerate(records):
         for point in record.points:
-            owner = seen.get(point)
-            if owner is not None and owner != record.key:
-                raise ValueError(
-                    f"{image_name!r} layer {layer} has overlapping subsets at {point}; "
-                    "regenerate fine_grained_subsets.json with subset_partition.py"
-                )
-            seen[point] = record.key
+            if record_index not in memberships[point]:
+                memberships[point].append(record_index)
+    return memberships
+
+
+def subset_summaries(records: list[SubsetRecord]) -> dict[str, str]:
+    """图例里每个子集的点数和重叠情况；用于图例与图上标记互相核对。"""
+    summaries = {}
+    shared_counts = defaultdict(int)
+    for membership in point_memberships(records).values():
+        if len(membership) > 1:
+            for record_index in membership:
+                shared_counts[record_index] += 1
+    for index, record in enumerate(records):
+        text = f"points: {len(record.points)}"
+        if shared_counts[index]:
+            text += f" · shared points: {shared_counts[index]}"
+        if record.complete is False:
+            text += " · partial"
+        summaries[record.key] = text
+    return summaries
 
 
 def _font_candidates(bold: bool) -> tuple[Path, ...]:
@@ -268,6 +291,46 @@ def _draw_marker(
         draw.rectangle((x - radius, y - arm, x + radius, y + arm), fill=color)
 
 
+def _draw_point_markers(
+        draw: ImageDraw.ImageDraw,
+        center: tuple[float, float],
+        radius: int,
+        members: list[int],
+        styles: Mapping[str, tuple[tuple[int, int, int], str]],
+        records: list["SubsetRecord"],
+) -> None:
+    """画出该点所属的全部子集标记。
+
+    只属于一个子集时就是普通标记；属于多个子集时，标记绕该点排成一圈，
+    每个标记都是完整大小且有白色描边，因此不会像同心标记那样互相遮挡折叠。
+    """
+    if len(members) == 1:
+        color, shape = styles[records[members[0]].key]
+        _draw_marker(draw, center, radius, color, shape)
+        return
+
+    count = len(members)
+    petal_radius = max(3, round(radius * (0.62 if count <= 3 else 0.5)))
+    # 相邻标记不重叠即可：环绕半径取“留出间隙”和“圆周放得下”两者的较大值。
+    offset = max(petal_radius + 3, (petal_radius + 2) / math.sin(math.pi / count))
+    x, y = center
+    petals = [(x + offset * math.cos(-math.pi / 2 + 2 * math.pi * index / count),
+               y + offset * math.sin(-math.pi / 2 + 2 * math.pi * index / count))
+              for index in range(count)]
+
+    # 先画整组的浅色外圈、连线和中心小点，说明这些标记同属一个实例，
+    # 再画标记盖住线头。
+    ring = offset + petal_radius + 3
+    draw.ellipse((x - ring, y - ring, x + ring, y + ring), outline=GROUP_RING, width=1)
+    for petal in petals:
+        draw.line((x, y, petal[0], petal[1]), fill=MUTED_INK, width=1)
+    dot = max(2, round(radius * 0.3))
+    draw.ellipse((x - dot, y - dot, x + dot, y + dot), fill=MUTED_INK)
+    for record_index, petal in zip(members, petals):
+        color, shape = styles[records[record_index].key]
+        _draw_marker(draw, petal, petal_radius, color, shape)
+
+
 def _source_path(image_dir: Path, image_name: str) -> Path:
     source = Path(image_name)
     return source if source.is_absolute() else image_dir / source
@@ -327,6 +390,7 @@ def _draw_sidebar(
 
     cursor_y = y + padding + 90
     available_width = width - padding * 2 - 32
+    summaries = subset_summaries(records)
     # Use a compact row for high-cardinality layers, but never omit an entry.
     gap = 8 if len(records) <= 60 else 5 if len(records) <= 150 else 3
     for index, record in enumerate(records, start=1):
@@ -337,13 +401,14 @@ def _draw_sidebar(
         label = f"#{index}  attribute: {record.attribute or '—'}"
         more = "; ".join(record.more_attributes) if record.more_attributes else "—"
         details = f"more_attributes: {more}"
-        point_text = f"points: {len(record.points)}"
+        point_text = summaries[record.key]
         text_x = x + padding + 25
         label_lines = wrap_to_width(draw, label, row_bold_font, available_width)
         detail_lines = wrap_to_width(draw, details, row_font, available_width)
-        # A third line is intentionally reserved for point count so that a
-        # human can reconcile the legend with the marker density.
-        lines = label_lines + detail_lines + [point_text]
+        # A third block is intentionally reserved for point count and overlap so
+        # that a human can reconcile the legend with the marker density.
+        summary_lines = wrap_to_width(draw, point_text, row_font, available_width)
+        lines = label_lines + detail_lines + summary_lines
         line_height = row_font_size + 4
         row_height = max(30, len(lines) * line_height + 3)
         if cursor_y + row_height > y + height - padding:
@@ -378,6 +443,7 @@ def _sidebar_height(
     row_bold_font = load_font(row_font_size, bold=True, font_path=font_path)
     available_width = width - padding * 2 - 32
     gap = 8 if len(records) <= 60 else 5 if len(records) <= 150 else 3
+    summaries = subset_summaries(records)
     total = padding + 90
     for index, record in enumerate(records, start=1):
         label_lines = wrap_to_width(
@@ -390,7 +456,10 @@ def _sidebar_height(
             row_font,
             available_width,
         )
-        total += max(30, (len(label_lines) + len(detail_lines) + 1) * (row_font_size + 4) + 3) + gap
+        # 第三行的高度按同样的换行规则计算，避免图例与画布高度不一致。
+        summary_lines = wrap_to_width(draw, summaries[record.key], row_font, available_width)
+        total += max(30, (len(label_lines) + len(detail_lines) + len(summary_lines))
+                     * (row_font_size + 4) + 3) + gap
     return total + padding
 
 
@@ -408,7 +477,6 @@ def render_layer(
     """Render one layer as an RGB review figure."""
     if not records:
         raise ValueError("cannot render an empty layer")
-    _validate_layer_points(image_name, layer, records)
     styles = _style_for_records(records)
     source = image.convert("RGB")
     displayed, scale = _resize_for_display(source, max_image_width, max_image_height)
@@ -428,7 +496,7 @@ def render_layer(
     draw.text((margin, 15), f"{Path(image_name).name} - layer {layer}",
               fill=PRIMARY_INK, font=title_font)
     draw.text((margin, 43),
-              "Each marker belongs to exactly one subset in this layer.",
+              "Subsets may overlap: markers ringed around one point belong to the same instance.",
               fill=SECONDARY_INK, font=subtitle_font)
 
     image_x = margin
@@ -440,22 +508,17 @@ def render_layer(
     canvas.paste(displayed, (image_x, image_y))
     marker_draw = ImageDraw.Draw(canvas)
 
-    # Points are validated as disjoint above; the map keeps one marker per point.
-    point_memberships: dict[tuple[float, float], list[int]] = defaultdict(list)
-    for record_index, record in enumerate(records):
-        for point in record.points:
-            point_memberships[point].append(record_index)
-
+    # 一个点可以同时属于多个子集，此时标记绕点排开，全部归属都完整可见。
+    memberships = point_memberships(records)
     marker_radius = max(6, min(16, round(min(image_width, image_height) * 0.018)))
-    for point, membership_indices in point_memberships.items():
+    for point, membership_indices in memberships.items():
         x = image_x + point[0] * scale
         y = image_y + point[1] * scale
         if not (-marker_radius <= x <= canvas_width + marker_radius
                 and -marker_radius <= y <= canvas_height + marker_radius):
             continue
-        record = records[membership_indices[0]]
-        color, shape = styles[record.key]
-        _draw_marker(marker_draw, (x, y), marker_radius, color, shape)
+        _draw_point_markers(marker_draw, (x, y), marker_radius,
+                            membership_indices, styles, records)
 
     sidebar_x = image_x + image_width + gap
     sidebar_y = title_height
@@ -526,7 +589,6 @@ def generate_visualizations(
         with Image.open(source_path) as source:
             source.load()
             for layer, layer_records in layers.items():
-                _validate_layer_points(image_name, layer, layer_records)
                 figure = render_layer(
                     source,
                     image_name,

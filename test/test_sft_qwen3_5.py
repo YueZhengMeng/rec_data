@@ -10,10 +10,10 @@ import torch
 from PIL import Image
 
 from crop import AdaptiveCropper, CropConfig
-from finetune_Qwen3_5 import (completion_loss_inputs, completion_token_count,
-                              mean_token_loss, save_best, select_lora_modules)
-from sft_qwen3_5_data import (VLMAttributeDataset, VLMCompletionCollator,
-                              load_sft_samples, serialize_attributes)
+from old.finetune_Qwen3_5 import (completion_loss_inputs, completion_token_count,
+                                  mean_token_loss, save_best, select_lora_modules)
+from old.sft_qwen3_5_data import (VLMAttributeDataset, VLMCompletionCollator,
+                                  load_sft_samples, serialize_attributes)
 
 ROOT = Path(__file__).resolve().parent
 MODEL_PATH = Path("F:/model/Qwen3.5-0.8B")

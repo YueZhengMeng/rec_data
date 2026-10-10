@@ -1,3 +1,4 @@
+import json
 import os.path
 
 from PIL import Image
@@ -5,7 +6,13 @@ from openai import AsyncOpenAI
 
 from crop import AdaptiveCropper
 from llm_api_async import openai_complete_async
-from prompts import EXTRACT_ATTRIBUTES_PROMPT, build_extract_attributes_messages
+from prompts import (
+    EXTRACT_ATTRIBUTES_PROMPT,
+    PREDICATE_JUDGMENT_PROMPT,
+    build_extract_attributes_messages,
+    build_extract_attributes_prompt,
+    build_instance_messages,
+)
 from utils import encode_image
 
 
@@ -21,42 +28,54 @@ class BaseAgent:
         ).with_options(timeout=1800.0)
 
 
-class AttributesExtractor(BaseAgent):
+class VisualAgent(BaseAgent):
+    """Shared online three-view inference for extraction and predicate judging."""
+
     def __init__(self, agent_name, api_key, base_url, model_name, image_dir, cropper: AdaptiveCropper):
         super().__init__(agent_name, api_key, base_url, model_name)
         self.image_dir = image_dir
         self.cropper = cropper
-        self.prompt["extract_attributes"] = EXTRACT_ATTRIBUTES_PROMPT
 
-    async def extract_attributes(self, instance_data):
-        # 读取图片并在内存中构造全局、上下文和细粒度视图
+    async def infer(self, instance_data, *, text_prompt):
         image_path = os.path.join(self.image_dir, instance_data["image_name"])
         with Image.open(image_path) as source_image:
-            image_global = source_image.convert("RGB")
             crops = self.cropper.create_crops(
-                image_global,
+                source_image.convert("RGB"),
                 image_name=instance_data["image_name"],
                 category=instance_data["category"],
                 point=instance_data["point"],
             )
-            base64_image_global = encode_image(crops.full_image)
-            base64_image_context = encode_image(crops.context_image)
-            base64_image_fine = encode_image(crops.fine_image)
-
-        # 复用统一消息构造函数，保证在线请求和 Batch JSONL 的输入完全一致
-        messages = build_extract_attributes_messages(
-            base64_image_global,
-            base64_image_context,
-            base64_image_fine,
-            instance_data["category"],
-            instance_data["attributes"],
-            self.prompt["extract_attributes"],
-        )
-
-        messages = await openai_complete_async(messages, self.client, self.model_name)
-        if not messages or not isinstance(messages, list) or not isinstance(messages[-1], dict):
+            images = tuple(encode_image(image) for image in (
+                crops.full_image, crops.context_image, crops.fine_image
+            ))
+        messages = build_instance_messages(*images, text_prompt)
+        reply = await openai_complete_async(messages, self.client, self.model_name)
+        if not reply or not isinstance(reply, list) or not isinstance(reply[-1], dict):
             return None, None
-        content = messages[-1].get("content")
-        if not isinstance(content, str):
-            return None, messages
-        return content, messages
+        content = reply[-1].get("content")
+        return (content if isinstance(content, str) else None), reply
+
+
+class AttributesExtractor(VisualAgent):
+    def __init__(self, agent_name, api_key, base_url, model_name, image_dir, cropper: AdaptiveCropper):
+        super().__init__(agent_name, api_key, base_url, model_name, image_dir, cropper)
+        self.prompt["extract_attributes"] = EXTRACT_ATTRIBUTES_PROMPT
+
+    async def extract_attributes(self, instance_data):
+        prompt = build_extract_attributes_prompt(
+            instance_data["category"], instance_data["attributes"],
+            self.prompt["extract_attributes"]
+        )
+        return await self.infer(instance_data, text_prompt=prompt)
+
+
+class PredicateJudge(VisualAgent):
+    """Classify closed visual predicates using the same three marked/cropped views."""
+
+    async def judge(self, instance_data, phrases):
+        text_prompt = (PREDICATE_JUDGMENT_PROMPT
+                       + "\nOriginal caption: " + instance_data["caption"]
+                       + "\nCategory: " + instance_data["category"]
+                       + "\nAttribute phrases (JSON): " + json.dumps(phrases, ensure_ascii=False))
+        content, messages = await self.infer(instance_data, text_prompt=text_prompt)
+        return content, messages[-1] if messages else None

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-from agents_local import LocalAttributesExtractor
+from old.agents_local import LocalAttributesExtractor
 from main_local import parse_attributes, process_local_batch
 from prompts import build_extract_attributes_prompt
 

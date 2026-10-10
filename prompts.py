@@ -63,6 +63,44 @@ def build_extract_attributes_prompt(category, attributes, prompt=EXTRACT_ATTRIBU
             .replace("<|>Category Guidance Here<|>", guidance).strip())
 
 
+# 每个 caption 只向 LLM 提供该目标集合的类别和新增属性短语。
+PREDICATE_PROPOSAL_PROMPT = """Select reusable, visually decidable additional attributes for referring-expression counting.
+The input gives one category and a list of short attribute phrases for one caption's target instances.
+Remove synonyms, redundant, scene-wide, uncertain or overly complex phrases. Do not
+merge different colors, directions, parts or negation. Keep relations only if their
+anchor and meaning are clear. Do not invent or rewrite phrases.
+Return ONLY a JSON list of selected phrases from the input, for example:
+["white laces", "blue sole"]. An empty list is allowed.
+"""
+
+PREDICATE_JUDGMENT_PROMPT = """You are given three views of the SAME target instance: a full image and
+context crop marked in red, and an unmarked fine crop. The red marks are annotations,
+not object properties. Identify ONLY the marked target; use the full view for relations.
+The original caption defines the parent set; assess each attribute only for this target.
+Return ONLY JSON: {"labels": {"attribute phrase": "yes/no/unknown", ...}}.
+Include every supplied phrase exactly once. yes: clear visual evidence it applies;
+no: clear visual evidence it does NOT apply; unknown: tiny, occluded, unclear, or
+ambiguous reference object. An attribute missing from a previous open-ended description
+is NEVER evidence for no. Do not guess or treat the annotation marker as an attribute.
+"""
+
+
+def build_instance_messages(base64_image_global, base64_image_context,
+                            base64_image_fine, text_prompt):
+    """Keep the original three-view message order for both extraction and judgment."""
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image_global}"}},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image_context}"}},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image_fine}"}},
+                {"type": "text", "text": text_prompt},
+            ],
+        }
+    ]
+
+
 def build_extract_attributes_messages(
         base64_image_global,
         base64_image_context,
@@ -73,26 +111,6 @@ def build_extract_attributes_messages(
 ):
     """按照 Global、Context、Fine、文本的固定顺序组装多模态消息。"""
     text_prompt = build_extract_attributes_prompt(category, attributes, prompt)
-    return [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image_global}"},
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image_context}"},
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image_fine}"},
-                },
-                {
-                    "type": "text",
-                    "text": text_prompt,
-                },
-            ],
-        }
-    ]
+    return build_instance_messages(
+        base64_image_global, base64_image_context, base64_image_fine, text_prompt
+    )

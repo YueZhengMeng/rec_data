@@ -16,7 +16,7 @@ from accelerate.utils import gather_object
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from agents_local import LocalAttributesExtractor
+from old.agents_local import LocalAttributesExtractor
 from config import CONFIG, LOCAL_CONFIG
 from crop import AdaptiveCropper, CropConfig
 

@@ -1,15 +1,8 @@
-"""基于实例级语义结果，构建 caption 范围内的层次化细粒度子集。
+"""读取 judge_predicates.py 的实例三值结果，在每个原 caption 内划分层次子集。
 
-输入数据已经由前置流程完成格式整理和质量检查。本脚本只负责：
-
-1. 在原始 caption 定义的实例集合内收集语义条件；
-2. 使用本地 Qwen3-Embedding 对短语做语义归并；
-3. 枚举条件交集并确定每个子集的真实实例点集；
-4. 将可复现的子集树写入 JSON。
-
-输入格式和质量由前置流程保证；这里只额外提示增强属性与同图其他 caption
-的原始属性是否语义重复。输入文件一次性载入内存，然后按图片处理；每张图片
-的 Qwen3-Embedding 向量在图片处理完成后释放，不跨图片缓存。
+yes 中的候选短语是子集条件，no 和 unknown 都不加入正子集。
+候选已在 propose 阶段归并，三值标签不再做 embedding 合并，避免改变已判定的语义。
+原始 instance_data.json 提供完整父点集；输出保留原 caption 和新增子集。
 """
 
 from __future__ import annotations
@@ -18,7 +11,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import sys
 import tempfile
 from collections import defaultdict
@@ -29,221 +21,29 @@ from typing import Any, Iterable, Iterator
 import numpy as np
 from tqdm import tqdm
 
+from semantic_attributes import (
+    ATTRIBUTE_FIELDS,
+    DEFAULT_MODEL_PATH,
+    DEFAULT_SIMILARITY_THRESHOLD,
+    _compatible_phrases,
+    _cosine,
+    _instance_attribute_entries,
+    deduplicate_instance_attributes,
+)
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-ATTRIBUTE_FIELDS = ("appearance", "action", "location", "relation")
-DEFAULT_MODEL_PATH = Path("F:/model/Qwen3-Embedding-0.6B")
-DEFAULT_INPUT_PATH = Path("anno/extract_result.json")
+DEFAULT_INPUT_PATH = Path("anno/predicate_labels.json")
+DEFAULT_INSTANCES_PATH = Path("anno/instance_data.json")
 DEFAULT_OUTPUT_PATH = Path("anno/fine_grained_subsets.json")
-
-# Qwen3-Embedding 的余弦阈值需要用 REC 属性短语重新校准。
-DEFAULT_SIMILARITY_THRESHOLD = 0.86
 DEFAULT_MIN_SUBSET_SIZE = 5
 DEFAULT_MAX_CONDITION_DEPTH = 3
-DEFAULT_BATCH_SIZE = 64
-DEFAULT_MAX_LENGTH = 128
-
-_COLOR_TERMS = {
-    "black", "white", "red", "green", "blue", "yellow", "orange", "purple",
-    "pink", "brown", "gray", "grey", "beige", "tan", "gold", "silver",
-    "maroon", "navy", "teal", "cyan", "magenta", "burgundy", "cream",
-}
-_DIRECTION_OPPOSITES = {
-    "horizontal": ({"left"}, {"right"}),
-    "vertical": ({"top", "upper", "above", "over"}, {"bottom", "lower", "below", "under"}),
-    "depth": ({"front"}, {"behind", "back"}),
-    "containment": ({"inside"}, {"outside"}),
-}
-_POLARITY_TERMS = {"no", "not", "without", "never", "none", "neither", "nor"}
-
-
-def _exclusive_signature(text: str) -> dict[str, frozenset[str]]:
-    """提取不能仅凭高向量相似度跨越的保守语义面。
-
-    Qwen3-Embedding 可能把两个上下文相近、但任务语义相反的短语映射得很近。例如
-    ``left``/``right``、不同颜色以及带否定词的表达不能直接合并。
-    这里的规则不是替代模型，而是给向量聚类增加一道安全护栏。
-    """
-    tokens = set(re.findall(r"[\w'-]+", text))
-    result = {}
-    colors = tokens & _COLOR_TERMS
-    colors.discard("grey")
-    if colors:
-        result["color"] = frozenset(colors)
-    for facet, (positive, negative) in _DIRECTION_OPPOSITES.items():
-        values = set()
-        if tokens & positive:
-            values.add("positive")
-        if tokens & negative:
-            values.add("negative")
-        if values:
-            result[facet] = frozenset(values)
-    result["polarity"] = frozenset({"negative" if tokens & _POLARITY_TERMS else "positive"})
-    numbers = frozenset(re.findall(r"\d+(?:\.\d+)?", text))
-    if numbers:
-        result["number"] = numbers
-    return result
-
-
-def _compatible_phrases(left: str, right: str) -> bool:
-    """判断两个短语是否允许进入同一个语义簇。"""
-    left_signature = _exclusive_signature(left)
-    right_signature = _exclusive_signature(right)
-    for facet in left_signature.keys() & right_signature.keys():
-        if left_signature[facet].isdisjoint(right_signature[facet]):
-            return False
-    return True
 
 
 def _condition_id(field: str, members: tuple[str, ...]) -> str:
-    """根据字段和簇内短语生成稳定的条件 ID，便于重复运行对齐结果。"""
     payload = json.dumps([field, members], ensure_ascii=False, separators=(",", ":"), indent=4)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def last_token_pool(last_hidden_states: Any, attention_mask: Any) -> Any:
-    """按 Qwen3-Embedding 官方示例取每条文本的最后一个有效 token。"""
-    left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
-    if left_padding:
-        return last_hidden_states[:, -1]
-    sequence_lengths = attention_mask.sum(dim=1) - 1
-    batch_size = last_hidden_states.shape[0]
-    import torch
-    batch_indices = torch.arange(batch_size, device=last_hidden_states.device)
-    return last_hidden_states[batch_indices, sequence_lengths]
-
-
-class Qwen3EmbeddingEncoder:
-    """使用 Qwen3-Embedding 批量编码当前图片中的短语。
-
-    按官方示例使用左 padding、最后有效 token pooling 和 L2 normalization。
-    编码结果只在当前图片的处理过程中存在，不跨图片缓存。
-    """
-
-    def __init__(self, model_path: str | Path, batch_size: int = DEFAULT_BATCH_SIZE,
-                 max_length: int = DEFAULT_MAX_LENGTH, device: str | None = None):
-        # 延迟导入，使纯算法单元测试不必立即加载深度学习依赖。
-        try:
-            import torch
-            from transformers import Qwen2TokenizerFast, Qwen3Model
-        except ImportError as error:
-            raise RuntimeError(
-                "缺少 Qwen3-Embedding 依赖；请安装支持 Qwen3Model 的 transformers>=4.51.0 和 PyTorch"
-            ) from error
-        model_path = Path(model_path)
-        if not model_path.is_dir():
-            raise FileNotFoundError(f"找不到本地 Qwen3-Embedding 模型目录: {model_path}")
-        self.model_path = str(model_path)
-        self.torch = torch
-        self.batch_size = batch_size
-        self.max_length = max_length
-        self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        self.tokenizer = Qwen2TokenizerFast.from_pretrained(
-            str(model_path), padding_side="left", local_files_only=True
-        )
-        self.model = Qwen3Model.from_pretrained(str(model_path), local_files_only=True)
-        self.model.to(self.device)
-        self.model.eval()
-
-    def encode(self, phrases: Iterable[str]) -> dict[str, tuple[float, ...]]:
-        """仅编码本次传入的唯一短语；批间不保留向量结果。"""
-        unique = sorted(set(phrases))
-        result = {}
-        for start in range(0, len(unique), self.batch_size):
-            batch = unique[start:start + self.batch_size]
-            tokens = self.tokenizer(batch, padding=True, truncation=True,
-                                    max_length=self.max_length, return_tensors="pt")
-            tokens = {key: value.to(self.device) for key, value in tokens.items()}
-            with self.torch.no_grad():
-                hidden = self.model(**tokens).last_hidden_state
-                pooled = last_token_pool(hidden, tokens["attention_mask"])
-                # 先转 float32 再归一化，避免低精度权重下范数偏离 1。
-                pooled = self.torch.nn.functional.normalize(pooled.float(), p=2, dim=1)
-            for phrase, vector in zip(batch, pooled.cpu().tolist()):
-                result[phrase] = tuple(float(value) for value in vector)
-        return result
-
-
-def _cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
-    """向量已归一化，因此点积就是余弦相似度。"""
-    return sum(a * b for a, b in zip(left, right))
-
-
-def _instance_attribute_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
-    """把一个实例的增强属性展平为带原始位置的短语记录。"""
-    entries = []
-    for field in ATTRIBUTE_FIELDS:
-        for index, phrase in enumerate(record["more_attributes"].get(field, [])):
-            if phrase:
-                entries.append({
-                    "field": field,
-                    "index": index,
-                    "phrase": phrase,
-                    "text": phrase,
-                    "is_original": False,
-                })
-    return entries
-
-
-def deduplicate_instance_attributes(record: dict[str, Any], encoder: Any,
-                                    similarity_threshold: float,
-                                    vectors: dict[str, tuple[float, ...]] | None = None
-                                    ) -> dict[str, list[str]]:
-    """全局语义去重实例增强属性，原始 attribute 优先，增强短语保留最短项。
-
-    比较覆盖四个 more_attributes 字段，不限制字段边界；但被选中的增强短语仍保留在它原本所属的字段中。
-    若某个增强短语与原始 attributes 语义重复，则从 more_attributes 中删除。
-    """
-    entries = _instance_attribute_entries(record)
-    original = record["attributes"]
-    if original:
-        entries.append({
-            "field": "__original__",
-            "index": -1,
-            "phrase": original,
-            "text": original,
-            "is_original": True,
-        })
-    if not entries:
-        return {field: [] for field in ATTRIBUTE_FIELDS}
-
-    if vectors is None:
-        vectors = encoder.encode(entry["text"] for entry in entries)
-    # 原始标签先进入簇；增强短语按输入文本排序，结果不依赖字段遍历顺序。
-    ordered = sorted(entries, key=lambda item: (
-        not item["is_original"], item["text"], len(item["phrase"]), item["field"], item["index"]
-    ))
-    clusters: list[list[dict[str, Any]]] = []
-    for entry in ordered:
-        compatible_clusters = []
-        for cluster_index, cluster in enumerate(clusters):
-            if all(_compatible_phrases(entry["text"], member["text"])
-                   and _cosine(vectors[entry["text"]], vectors[member["text"]])
-                   >= similarity_threshold for member in cluster):
-                compatible_clusters.append(cluster_index)
-        if compatible_clusters:
-            clusters[compatible_clusters[0]].append(entry)
-        else:
-            clusters.append([entry])
-
-    retained = []
-    for cluster in clusters:
-        originals = [entry for entry in cluster if entry["is_original"]]
-        if originals:
-            # 原始属性保留优先级最高，但不用写进增强字段，只过滤重复增强项。
-            continue
-        retained.append(min(cluster, key=lambda item: (
-            len(item["phrase"]), item["text"], item["field"], item["index"]
-        )))
-
-    # 按原字段、原始顺序输出剩余增强属性，保持原有 JSON 结构及字段归属。
-    retained_keys = {(item["field"], item["index"]) for item in retained}
-    return {
-        field: [phrase for index, phrase in enumerate(record["more_attributes"].get(field, []))
-                if (field, index) in retained_keys]
-        for field in ATTRIBUTE_FIELDS
-    }
 
 
 def report_cross_caption_attribute_matches(records: list[dict[str, Any]], encoder: Any,
@@ -316,6 +116,17 @@ def cluster_conditions(records: list[dict[str, Any]], encoder: Any,
     不同字段里意思相同的短语会覆盖相同的条件。support_mask 仍是当前
     caption 根中命中该条件的实例集合，可直接做位运算求交集。
     """
+    if "yes" in records[0]:
+        # 闭集判断的短语已固定：严格按同一个词的 yes 建立支持集合，不再语义合并。
+        phrase_masks = defaultdict(int)
+        for index, record in enumerate(records):
+            for phrase in record["yes"]:
+                phrase_masks[phrase] |= 1 << index
+        return [Condition(
+            condition_id=phrase, field="more_attributes", source_fields=("yes",),
+            phrases=(phrase,), display=phrase, support_mask=mask
+        ) for phrase, mask in sorted(phrase_masks.items())]
+
     phrase_instances: dict[str, dict[str, set[int]]] = defaultdict(lambda: defaultdict(set))
     phrase_fields: dict[str, set[str]] = defaultdict(set)
     for local_index, record in enumerate(records):
@@ -464,7 +275,7 @@ def _select_image_trees(groups: list[list[dict[str, Any]]], encoder: Any,
                         max_condition_depth: int,
                         vectors: dict[str, tuple[float, ...]] | None = None
                         ) -> list[dict[str, Any]]:
-    """Select whole, non-overlapping subsets across all captions at each depth."""
+    """枚举每个可区分的条件交集；同一父集下的子集允许互相重叠。"""
     if min_subset_size < 1 or max_condition_depth < 1:
         raise ValueError("min_subset_size and max_condition_depth must be at least 1")
     if not 0.0 <= similarity_threshold <= 1.0:
@@ -490,44 +301,28 @@ def _select_image_trees(groups: list[list[dict[str, Any]]], encoder: Any,
             group, encoder, similarity_threshold, min_subset_size, max_condition_depth, vectors
         ))
 
+    # 每个点集只输出一次（同一个 mask 可能在多个层出现），但不同点集之间不再
+    # 竞争：一个实例可以同时属于多个子集，因此不做同层互斥筛选。
     selected_masks = [{(1 << len(group)) - 1: tree["root_id"]}
                       for group, tree in zip(groups, trees)]
     for depth in range(0, max_condition_depth + 1):
-        # Candidates at the same depth compete as complete point sets. Larger
-        # supports win; stable content IDs resolve ties independent of input order.
-        ranked = []
         for group_index, paths_by_depth in enumerate(paths_by_group):
-            for mask, paths in paths_by_depth.get(depth, {}).items():
-                if mask in selected_masks[group_index]:
-                    continue  # a shallower layer already represents this point set
-                ranked.append((-mask.bit_count(), trees[group_index]["root_id"],
-                               tuple(groups[group_index][i]["instance_id"]
-                                     for i in range(len(groups[group_index])) if mask & (1 << i)),
-                               group_index, mask, paths))
-        ranked.sort(key=lambda item: (item[0], item[1], str(item[2]), item[4]))
-        taken_points: set[tuple[float, float]] = set()
-        taken_instances: set[Any] = set()
-        for _, _, _, group_index, mask, paths in ranked:
             group = groups[group_index]
-            if mask in selected_masks[group_index]:
-                continue
-            viable = [path for path in paths if path.parent_mask in selected_masks[group_index]]
-            if not viable:
-                continue
-            path = min(viable, key=lambda candidate: tuple(
-                (item.display, item.condition_id) for item in candidate.conditions
-            ))
-            members = [group[index] for index in range(len(group)) if mask & (1 << index)]
-            points = {tuple(item["point"]) for item in members}
-            instance_ids = {item["instance_id"] for item in members}
-            if points & taken_points or instance_ids & taken_instances:
-                continue
-            parent_id = selected_masks[group_index][path.parent_mask]
-            node = _node_from_path(group, trees[group_index]["root_id"], path, parent_id)
-            trees[group_index]["nodes"].append(node)
-            selected_masks[group_index][mask] = node["node_id"]
-            taken_points.update(points)
-            taken_instances.update(instance_ids)
+            # 先输出支持较多的子集，使父集通常排在子集前面；同一 mask 的等价路径按条件稳定选取。
+            for mask, paths in sorted(paths_by_depth.get(depth, {}).items(),
+                                      key=lambda item: (-item[0].bit_count(), item[0])):
+                if mask in selected_masks[group_index]:
+                    continue
+                path = min(paths, key=lambda candidate: tuple(
+                    (item.display, item.condition_id) for item in candidate.conditions
+                ))
+                # 父节点一定在更浅的层生成；找不到时说明该子集无法挂到树上，直接跳过。
+                parent_id = selected_masks[group_index].get(path.parent_mask)
+                if parent_id is None:
+                    continue
+                node = _node_from_path(group, trees[group_index]["root_id"], path, parent_id)
+                trees[group_index]["nodes"].append(node)
+                selected_masks[group_index][mask] = node["node_id"]
     return trees
 
 
@@ -536,7 +331,7 @@ def build_subset_tree(records: list[dict[str, Any]], encoder: Any,
                       min_subset_size: int = DEFAULT_MIN_SUBSET_SIZE,
                       max_condition_depth: int = DEFAULT_MAX_CONDITION_DEPTH,
                       vectors: dict[str, tuple[float, ...]] | None = None) -> dict[str, Any]:
-    """Build one caption's tree (use _select_image_trees for image-wide disjointness)."""
+    """Build one caption's tree (use _select_image_trees for image-wide trees)."""
     return _select_image_trees([records], encoder, similarity_threshold,
                                min_subset_size, max_condition_depth, vectors)[0]
 
@@ -629,21 +424,46 @@ def build_annotation_image(groups: list[list[dict[str, Any]]],
             # 原始 attribute 产生一个无法区别于原 caption 的冗余 key。
             if not more_attributes:
                 continue
-            base_key = " ".join([
-                group[0]["category"], group[0]["attributes"],
-                " ".join(more_attributes),
-            ]).strip()
+            base_key = " ".join(part for part in (
+                group[0]["category"], group[0]["attributes"], " ".join(more_attributes)
+            ) if part).strip()
             key = _unique_annotation_key(image_annotations, base_key, node["node_id"])
-            image_annotations[key] = _annotation_entry(
-                group, node["points"], more_attributes
-            )
+            annotation = _annotation_entry(group, node["points"], more_attributes)
+            if "yes" in group[0]:
+                # unknown/未判实例不进入 yes；有这些项时仅是已确认的正部分，不宣称完整。
+                annotation["label_source"] = "model_pseudo"
+                annotation["complete"] = all(
+                    not record.get("judgment_missing", False)
+                    and all(phrase in record["yes"] or phrase in record["no"]
+                            for phrase in more_attributes)
+                    for record in group
+                )
+            image_annotations[key] = annotation
+
     return image_annotations
+
+
+def attach_judgments(instances: list[dict], results: list[dict]) -> list[dict]:
+    """保留已判断 caption 的完整原点集；未完成的实例没有 yes 条件。"""
+    by_id = {row["instance_id"]: row for row in results}
+    roots = {(row["image_name"], row["caption"]) for row in results}
+    records = []
+    for instance in instances:
+        if (instance["image_name"], instance["caption"]) not in roots:
+            continue
+        judgment = by_id.get(instance["instance_id"], {})
+        records.append({**instance, "yes": judgment.get("yes", []),
+                        "no": judgment.get("no", []),
+                        "unknown": judgment.get("unknown", []),
+                        "judgment_missing": not judgment})
+    return records
 
 
 def run_partition(input_path: str | Path, output_path: str | Path, encoder: Any,
                   similarity_threshold: float, min_subset_size: int,
                   max_condition_depth: int, overwrite: bool = False,
-                  metadata_output_path: str | Path | None = None) -> dict[str, int]:
+                  metadata_output_path: str | Path | None = None,
+                  instances_path: str | Path | None = None) -> dict[str, int]:
     input_path = Path(input_path)
     output_path = Path(output_path)
     metadata_path = Path(metadata_output_path) if metadata_output_path else output_path.with_name(
@@ -663,8 +483,12 @@ def run_partition(input_path: str | Path, output_path: str | Path, encoder: Any,
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(input_path, "r", encoding="utf-8") as file:
-        # 输入文件约 298 MB，按当前约定一次性载入。
         all_records = json.load(file)
+    if instances_path is not None:
+        if any("yes" not in row or "no" not in row or "unknown" not in row for row in all_records):
+            raise ValueError("输入应为包含 yes/no/unknown 三个列表的实例判断结果")
+        with open(instances_path, encoding="utf-8") as file:
+            all_records = attach_judgments(json.load(file), all_records)
     image_groups = group_image_records(all_records)
     stats = {"instances": 0, "caption_roots": 0, "subset_nodes": 0, "images": 0}
     data_fd, data_temp_name = tempfile.mkstemp(
@@ -678,27 +502,24 @@ def run_partition(input_path: str | Path, output_path: str | Path, encoder: Any,
             data_output.write("{")
             first_image = True
             for image_records in tqdm(image_groups):
-                # 同一张图片内的所有短语只编码一次；不把向量缓存到下一张图片。
-                image_phrases = {
-                    phrase
-                    for record in image_records
-                    for phrase in [record["attributes"]] + [
-                        item for field in ATTRIBUTE_FIELDS
-                        for item in record["more_attributes"].get(field, [])
-                    ]
-                    if phrase
-                }
-                image_vectors = encoder.encode(image_phrases)
-                report_cross_caption_attribute_matches(
-                    image_records, encoder, similarity_threshold, image_vectors
-                )
-
                 caption_groups = list(group_caption_records(image_records))
-                for group in caption_groups:
-                    for record in group:
-                        record["more_attributes"] = deduplicate_instance_attributes(
-                            record, encoder, similarity_threshold, image_vectors
-                        )
+                image_vectors = None
+                if "yes" not in image_records[0]:
+                    # 保留旧算法的函数接口供历史测试使用；新入口只读取三值结果。
+                    image_phrases = {phrase for record in image_records
+                                     for phrase in [record["attributes"]] + [
+                                         item for field in ATTRIBUTE_FIELDS
+                                         for item in record["more_attributes"].get(field, [])
+                                     ] if phrase}
+                    image_vectors = encoder.encode(image_phrases)
+                    report_cross_caption_attribute_matches(
+                        image_records, encoder, similarity_threshold, image_vectors
+                    )
+                    for group in caption_groups:
+                        for record in group:
+                            record["more_attributes"] = deduplicate_instance_attributes(
+                                record, encoder, similarity_threshold, image_vectors
+                            )
                 trees = _select_image_trees(
                     caption_groups, encoder, similarity_threshold,
                     min_subset_size, max_condition_depth, image_vectors
@@ -730,7 +551,9 @@ def run_partition(input_path: str | Path, output_path: str | Path, encoder: Any,
 
         metadata = {
             "metadata": {
-                "model_path": str(getattr(encoder, "model_path", DEFAULT_MODEL_PATH)),
+                "model_path": str(getattr(encoder, "model_path", DEFAULT_MODEL_PATH)) if encoder is not None else None,
+                "condition_source": "yes" if instances_path is not None else "more_attributes",
+
                 "similarity_threshold": similarity_threshold,
                 "min_subset_size": min_subset_size,
                 "max_condition_depth": max_condition_depth,
@@ -769,37 +592,30 @@ def run_partition(input_path: str | Path, output_path: str | Path, encoder: Any,
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="基于本地 Qwen3-Embedding 的 REC-8K 层次化细粒度子集划分")
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH, help="实例属性 JSON 数组")
+    parser = argparse.ArgumentParser(description="基于实例三值判断 yes 列表的层次子集划分")
+    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH, help="实例 yes/no/unknown 判断 JSON")
+    parser.add_argument("--instances", type=Path, default=DEFAULT_INSTANCES_PATH, help="完整原始实例点集")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH,
                         help="annotations_format 风格的数据集输出 JSON")
     parser.add_argument("--metadata-output", type=Path, default=None,
                         help="metadata/stats 输出 JSON；默认与数据输出同目录并追加 _metadata")
-    parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH, help="本地 Qwen3-Embedding 权重目录")
-    parser.add_argument("--similarity-threshold", type=float, default=DEFAULT_SIMILARITY_THRESHOLD,
-                        help="同义短语余弦相似度阈值 [0,1]")
     parser.add_argument("--min-subset-size", type=int, default=DEFAULT_MIN_SUBSET_SIZE,
                         help="保留子集的最少实例数")
     parser.add_argument("--max-condition-depth", type=int, default=DEFAULT_MAX_CONDITION_DEPTH,
                         help="最多新增 more_attributes 的数量（不包含原始 attribute）")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Qwen3-Embedding 编码 batch size")
-    parser.add_argument("--device", default=None, help="模型设备，例如 cpu 或 cuda")
-    parser.add_argument("--overwrite", action="store_true", help="允许原子覆盖已存在的输出文件", default=True)
+    parser.add_argument("--overwrite", action="store_true", help="允许原子覆盖已存在的输出文件")
     args = parser.parse_args(argv)
-    if not 0.0 <= args.similarity_threshold <= 1.0:
-        parser.error("--similarity-threshold 必须在 [0, 1] 范围内")
-    if args.min_subset_size < 1 or args.max_condition_depth < 1 or args.batch_size < 1:
-        parser.error("--min-subset-size、--max-condition-depth 和 --batch-size 必须为正整数")
+    if args.min_subset_size < 1 or args.max_condition_depth < 1:
+        parser.error("--min-subset-size、--max-condition-depth 必须为正整数")
     return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        encoder = Qwen3EmbeddingEncoder(args.model_path, batch_size=args.batch_size, device=args.device)
-        stats = run_partition(args.input, args.output, encoder, args.similarity_threshold,
+        stats = run_partition(args.input, args.output, None, DEFAULT_SIMILARITY_THRESHOLD,
                               args.min_subset_size, args.max_condition_depth, args.overwrite,
-                              args.metadata_output)
+                              args.metadata_output, args.instances)
     except Exception as error:
         print(f"子集划分失败: {error}", file=sys.stderr)
         return 1

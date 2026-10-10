@@ -5,7 +5,8 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from process_student_output import normalize_and_deduplicate, normalize_phrase
+from old.process_student_output import normalize_and_deduplicate, normalize_phrase
+from semantic_attributes import last_token_pool
 from subset_partition import (
     build_subset_tree,
     build_annotation_image,
@@ -14,7 +15,6 @@ from subset_partition import (
     report_cross_caption_attribute_matches,
     deduplicate_instance_attributes,
     run_partition,
-    last_token_pool,
 )
 
 
