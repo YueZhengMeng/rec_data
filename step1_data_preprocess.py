@@ -1,42 +1,92 @@
+"""step1：把原始标注摊平成实例表（JSONL）。
+
+输出 ``anno/instance_data.jsonl``，一条一个「图片 × caption × 点」，字段与旧版
+``instance_data.json`` 完全一致：
+
+    image_name, caption, category, attributes, point, type,
+    instance_id, image_idx, caption_idx, point_idx
+
+``instance_id`` 的编号顺序仍然是「图片 → caption → 点」，与旧文件一致，因此
+已有产物里的 ``instance_id`` 继续有效。
+
+改 JSONL 的原因：旧文件 108MB，后续每个步骤都要整份读入；JSONL 可以流式读，
+且下游按实例追加写盘时不必回写整个文件。
+
+    python step1_data_preprocess.py
+    python step1_data_preprocess.py --limit-images 20
+"""
+
+from __future__ import annotations
+
+import argparse
 import json
+import sys
+from pathlib import Path
+from typing import Iterator, Sequence
+
+from recsub.config import path
+from recsub.console import configure_console
+from recsub.io import write_jsonl_atomic
 
 
-def main():
-    # 加载原始注释
-    with open("./anno/annotations.json", "r", encoding="utf-8") as f:
-        anno = json.load(f)
-
-    # instance_id 是唯一主键
-    instance_list = []
+def iter_instances(annotations: dict) -> Iterator[dict]:
+    """按旧版顺序摊平：图片 → caption → 点。"""
     instance_id = 0
-    image_idx = 0
-    for image_name, image_anno in anno.items():
-        caption_idx = 0
-        for caption, caption_anno in image_anno.items():
-            point_idx = 0
-            for point in caption_anno["points"]:
-                instance_list.append({
+    for image_idx, (image_name, image_annotations) in enumerate(annotations.items()):
+        for caption_idx, (caption, caption_annotation) in enumerate(image_annotations.items()):
+            for point_idx, point in enumerate(caption_annotation["points"]):
+                yield {
                     "image_name": image_name,
                     "caption": caption,
-                    "category": caption_anno["class"],
-                    "attributes": caption_anno["attribute"],
+                    "category": caption_annotation["class"],
+                    "attributes": caption_annotation["attribute"],
                     "point": point,
-                    "type": caption_anno["type"],
+                    "type": caption_annotation["type"],
                     "instance_id": instance_id,
                     "image_idx": image_idx,
                     "caption_idx": caption_idx,
                     "point_idx": point_idx,
-                })
+                }
                 instance_id += 1
-                point_idx += 1
-            caption_idx += 1
-        image_idx += 1
 
-    with open("./anno/instance_data.json", "w", encoding="utf-8") as f:
-        json.dump(instance_list, f, ensure_ascii=False, indent=4)
 
-    print("总数据量：", len(instance_list))
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="摊平原始标注为实例表 JSONL")
+    parser.add_argument("--annotations", type=Path, default=path("annotations"),
+                        help="原始标注 annotations.json")
+    parser.add_argument("--output", type=Path, default=path("instance_data"),
+                        help="实例表输出路径（.jsonl）")
+    parser.add_argument("--limit-images", type=int, default=0,
+                        help="只处理前 N 张图（0 表示全部），用于小样本调试")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    configure_console()
+    args = parse_args(argv)
+    if not args.annotations.is_file():
+        print(f"❌ 找不到原始标注：{args.annotations}", file=sys.stderr)
+        return 1
+
+    with args.annotations.open("r", encoding="utf-8") as handle:
+        annotations = json.load(handle)
+    if not isinstance(annotations, dict):
+        print("❌ 原始标注顶层应为「图片名 → 标注」对象", file=sys.stderr)
+        return 1
+
+    selected = annotations
+    if args.limit_images > 0:
+        image_names = list(annotations)[:args.limit_images]
+        selected = {name: annotations[name] for name in image_names}
+
+    total = write_jsonl_atomic(args.output, iter_instances(selected))
+    caption_roots = sum(len(records) for records in selected.values())
+    print(f"✅ 实例表：{total} 个实例，{caption_roots} 个 image-caption 根，"
+          f"{len(selected)} 张图 → {args.output}")
+    if args.limit_images > 0:
+        print(f"⚠️ 本次只处理前 {args.limit_images} 张图（--limit-images）")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

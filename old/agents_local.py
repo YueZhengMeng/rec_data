@@ -8,12 +8,11 @@ from typing import Any
 import torch
 from PIL import Image
 from accelerate import Accelerator
+from crop import AdaptiveCropper
 from peft import PeftModel
+from prompts import build_extract_attributes_prompt
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from transformers.generation.logits_process import LogitsProcessor, LogitsProcessorList
-
-from crop import AdaptiveCropper
-from prompts import build_extract_attributes_prompt
 
 
 class PresencePenaltyLogitsProcessor(LogitsProcessor):

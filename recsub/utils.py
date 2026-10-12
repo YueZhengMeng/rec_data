@@ -1,3 +1,11 @@
+"""图像编码与宽容的 JSON 解析。
+
+从原 ``utils.py`` 原样迁移——这部分的实现（代码块剥离、Python 字面量替换、
+尾随逗号删除、未闭合容器补全）在实测中可靠，不再改动逻辑。
+"""
+
+from __future__ import annotations
+
 import base64
 import json
 import re
@@ -7,8 +15,11 @@ from PIL import Image
 
 
 def encode_image(image: Image.Image) -> str:
-    # 数据集中8011张图片，7691张是jpg，329张是png
-    # 统一转换为jpg格式
+    """统一编码为 JPEG base64。
+
+    数据集中 8011 张图有 7691 张 jpg、329 张 png，统一转 JPEG 可以让在线
+    接口只处理一种格式；不传 quality 以保持与原实现完全一致的字节。
+    """
     buffer = BytesIO()
     image.convert("RGB").save(buffer, format="JPEG")
     return base64.b64encode(buffer.getvalue()).decode("utf-8")

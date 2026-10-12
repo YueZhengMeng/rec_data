@@ -6,10 +6,9 @@ from pathlib import Path
 
 import torch
 from PIL import Image
+from prompts import build_extract_attributes_prompt
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
-
-from prompts import build_extract_attributes_prompt
 
 ATTRIBUTE_KEYS = ("appearance", "action", "location", "relation")
 SPLIT_NAMES = ("train", "val", "test")

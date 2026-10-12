@@ -1,12 +1,14 @@
 # Qwen3.5 三视图属性提取 SFT
 
 训练入口为 `finetune_Qwen3_5.py`，只使用 **在线推理**生成的 `attributes`，不会将教师模型的 `reasoning_content` 作为标签。输入保持与
-`old/agents_local.py` 相同：标点原图、标点上下文裁剪、无标点局部裁剪以及共享提示词；输出为包含 `appearance`、`action`、`location`、
+`old/agents_local.py` 相同：标点原图、标点上下文裁剪、无标点局部裁剪以及共享提示词；输出为包含 `appearance`、`action`、
+`location`、
 `relation` 的 JSON。评价和早停依据只有 loss。
 
 ## 数据
 
-默认读取 `exp/exp_0909/result.json`，按 `instance_id` 与 `../anno/instance_data.json` 关联，从 `config.CONFIG['image_dir']`
+默认读取 `exp/exp_0909/result.json`，按 `instance_id` 与 `../anno/instance_data.json` 关联，从
+`config.CONFIG['image_dir']`
 加载图片，并按 `anno/splits.json` 的图像/描述组合分为 train、val、test。默认结果文件目前有 101 条：58 train、17 val、26
 test。后续标注可通过 `--result-files` 传入一个或多个在线结果文件；跨文件 `instance_id` 不得重复，三份划分都必须有样本。不要将
 `exp/exp_local_qwen35/result.json` 当作在线教师标签——其中成功记录通常不保存 `attributes`。

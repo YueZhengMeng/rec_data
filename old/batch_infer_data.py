@@ -9,11 +9,10 @@ import random
 from pathlib import Path
 
 from PIL import Image
-from tqdm import tqdm
-
 from agents import build_extract_attributes_messages
 from config import CONFIG
 from crop import AdaptiveCropper, CropConfig
+from tqdm import tqdm
 from utils import encode_image
 
 # 阿里云 Batch 的平台硬限制；默认写入时使用更保守的单文件大小。
