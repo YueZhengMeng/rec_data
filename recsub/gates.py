@@ -1,25 +1,25 @@
 """子集质量门禁。
 
-原实现把「yes 列表」的所有条件以及条件交集枚举成子集（最多三层），结果是
-组合爆炸：808 个实例 / 28 个根产出 573 个子集，其中硬币那张图独占 380 个。那不是
-筛选，是把能凑出来的交集全输出一遍。
+五条可解释的门禁逐条给出实际数值，没通过的也记进决策日志——「哪些条件被自动
+丢弃、为什么」本身就是论文里可划分性分析的素材。
 
-这里换成五条可解释的门禁，逐条给出实际数值，没通过的也记进决策日志——「哪些
-条件被自动丢弃、为什么」本身就是论文里可划分性分析的素材。
+默认值集中在 ``recsub/config.py`` 的 ``gates`` 段，:class:`GateSettings` 只做
+字段校验，不自带第二套默认值。
 
 | 门禁 | 默认 | 作用 |
 |---|---|---|
-| G1 支持 | ``min_support=5`` 且 ``min_complement=5`` | 两侧都非空，互补预测才良定义 |
-| G2 unknown | ``max_unknown_ratio=0.10`` | 判断不了的不进训练 |
+| G1 支持 | ``min_support=1`` 且 ``min_complement=1`` | 两侧都非空，互补预测才良定义 |
+| G2 unknown | ``max_unknown_ratio=0`` | 判断不了的不进训练 |
 | G3 父冗余 | 硬性 | step4 已过滤，这里复验 |
 | G4 子集互冗余 | ``max_support_jaccard=0.80`` | 砍掉支持集近似相同的条件 |
 | G5 区分度 | ``min_balance=0.15`` | ``min(yes,no)/n`` 下限，砍掉 90% yes 的伪条件 |
+| G6 数量上限 | ``max_predicates_per_root=3`` | 同一根最多接受的谓词数 |
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 GATE_SUPPORT = "G1_support"
 GATE_UNKNOWN = "G2_unknown_ratio"
@@ -31,14 +31,14 @@ GATE_CAP = "G6_over_cap"
 
 @dataclass(frozen=True)
 class GateSettings:
-    min_support: int = 5
-    min_complement: int = 5
-    max_unknown_ratio: float = 0.10
-    min_balance: float = 0.15
-    max_support_jaccard: float = 0.80
-    max_predicates_per_root: int = 3
-    max_depth: int = 1
-    emit_complement: bool = True
+    min_support: int
+    min_complement: int
+    max_unknown_ratio: float
+    min_balance: float
+    max_support_jaccard: float
+    max_predicates_per_root: int
+    max_depth: int
+    emit_complement: bool
 
     def __post_init__(self) -> None:
         if self.min_support < 1 or self.min_complement < 0:
@@ -147,7 +147,3 @@ def select_with_redundancy(candidates: list[tuple[str, Counts, set]], settings: 
             continue
         accepted.append((predicate_id, counts, yes_set))
     return accepted, rejected
-
-
-def settings_from_config(config: Mapping[str, Any]) -> GateSettings:
-    return GateSettings(**dict(config["gates"]))

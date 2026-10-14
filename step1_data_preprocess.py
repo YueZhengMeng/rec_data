@@ -1,16 +1,14 @@
 """step1：把原始标注摊平成实例表（JSONL）。
 
-输出 ``anno/instance_data.jsonl``，一条一个「图片 × caption × 点」，字段与旧版
-``instance_data.json`` 完全一致：
+输出 ``anno/instance_data.jsonl``，一条一个「图片 × caption × 点」：
 
     image_name, caption, category, attributes, point, type,
     instance_id, image_idx, caption_idx, point_idx
 
-``instance_id`` 的编号顺序仍然是「图片 → caption → 点」，与旧文件一致，因此
-已有产物里的 ``instance_id`` 继续有效。
+``instance_id`` 按「图片 → caption → 点」的顺序递增编号；下游的续跑判断、与只带
+``instance_id`` 的提取记录的归并配对都依赖这个顺序，所以顺序本身是产物契约的一部分。
 
-改 JSONL 的原因：旧文件 108MB，后续每个步骤都要整份读入；JSONL 可以流式读，
-且下游按实例追加写盘时不必回写整个文件。
+JSONL 便于流式读取，且下游按实例追加写盘时不必回写整个文件。
 
     python step1_data_preprocess.py
     python step1_data_preprocess.py --limit-images 20
@@ -30,7 +28,7 @@ from recsub.io import write_jsonl_atomic
 
 
 def iter_instances(annotations: dict) -> Iterator[dict]:
-    """按旧版顺序摊平：图片 → caption → 点。"""
+    """按「图片 → caption → 点」的顺序摊平并递增编号。"""
     instance_id = 0
     for image_idx, (image_name, image_annotations) in enumerate(annotations.items()):
         for caption_idx, (caption, caption_annotation) in enumerate(image_annotations.items()):

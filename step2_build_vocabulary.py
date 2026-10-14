@@ -1,10 +1,10 @@
 """step2：从原始标注派生 (类别, 维度, 取值) 谓词词表。
 
-词表是整条链的上游产物：step3 用它做 few-shot 引导开放提取，step4 用它把候选
-词归一化到槽位，step6 的消融需要「仅原词表」这个基线。
+词表是整条链的上游产物：step4 用它把候选词归一化到槽位，扫「仅原词表 vs 加生成
+谓词」的消融也以它作为基线。
 
 默认**只用 train 划分**构建，避免 val/test 的标注词进入提示词。取值至少覆盖
-``--min-root-count`` 个根才收录，长尾噪声不进 few-shot。
+``--min-root-count`` 个根才收录，默认 1 表示全部收录。
 
 产物三个：
 - ``anno/attribute_vocabulary.json``：程序读取的词表
@@ -83,6 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         split_keys = load_split_keys(load_json_any(args.splits), args.split)
 
+    # 核心功能函数
     entries, stats = build_vocabulary(
         annotations, split_keys=split_keys, min_root_count=args.min_root_count
     )
@@ -113,13 +114,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"   划分 {args.split}：根 {stats['raw_roots']} 个（过滤掉 "
           f"{stats['skipped_by_split']} 个），归一化后 {stats['slots_before_min_root_count']} 个槽位，"
           f"因覆盖不足丢弃 {stats['dropped_by_min_root_count']} 个")
-    print(f"   场景相对（已排除出 few-shot）：{vocabulary.metadata['scene_relative_count']} 条")
+    print(f"   场景相对（step4 不作为补充候选）：{vocabulary.metadata['scene_relative_count']} 条")
     if overrides_present:
         print(f"   已应用人工覆盖：{applied}")
     else:
         print(f"   未提供 {args.overrides}（可选：人工改名/合并/删除/加别名）")
     print("   按维度：", dict(Counter(entry.dimension for entry in entries).most_common()))
-    for category in vocabulary.categories()[:6]:
+    print("   按类别：（前10个）")
+    for category in vocabulary.categories()[:10]:
         per_dimension = {dim: len(items)
                          for dim, items in vocabulary.dimensions_of(category).items()}
         print(f"   {category}: {per_dimension}")

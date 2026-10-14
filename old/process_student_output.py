@@ -80,7 +80,7 @@ def main():
     print(fail_id_list)
 
     # 加载教师模型标注结果
-    with open("../exp/exp_all/result.json", "r", encoding="utf-8") as f:
+    with open("../exp/exp_online_qwen38_flash/result.json", "r", encoding="utf-8") as f:
         data_teacher = json.load(f)
 
     teacher_count = 0

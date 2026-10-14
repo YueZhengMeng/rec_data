@@ -1,8 +1,8 @@
 """短语向量编码。
 
-沿用原 ``semantic_attributes.py`` 的 Qwen3-Embedding 封装（官方示例的
-last-token pooling），只加了一层**跨调用缓存**：词表条目和重复出现的候选
-短语会被反复编码，缓存能省掉绝大部分计算。
+Qwen3-Embedding 封装，按官方示例取最后一个有效 token 池化。编码器缓存可在每个根
+处理后收缩到闭集词表向量，避免开放短语逐根累积；同一根内的向量由归一化器的局部
+缓存复用。
 """
 
 from __future__ import annotations
@@ -75,6 +75,12 @@ class Qwen3EmbeddingEncoder:
             for phrase, vector in zip(batch, pooled.cpu().tolist()):
                 self._cache[phrase] = tuple(float(value) for value in vector)
         return {phrase: self._cache[phrase] for phrase in unique}
+
+    def retain_cache(self, phrases: set[str]) -> None:
+        """根处理完后仅保留闭集词表向量；开放短语不会跨根累积。"""
+        for phrase in list(self._cache):
+            if phrase not in phrases:
+                del self._cache[phrase]
 
     @property
     def cache_size(self) -> int:

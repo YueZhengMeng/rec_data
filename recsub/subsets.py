@@ -1,12 +1,11 @@
 """三值分区子集构造（step6 的核心）。
 
-输出不再只保留 yes 点：每个节点显式保存 yes / no / unknown 三个分区，避免把
-unknown 错当成 no，也避免把重叠子集误当互斥划分。通过门禁的正谓词可选生成
-``polarity=negative`` 的兄弟节点，节点带 ``complement_of``。
+每个节点显式保存 yes / no / unknown 三个分区，避免把 unknown 错当成 no，也避免
+把重叠子集误当互斥划分。通过门禁的正谓词可选生成 ``polarity=negative`` 的兄弟
+节点，节点带 ``complement_of``。
 
-默认只做深度 1。``max_depth=2`` 时只在同根已通过门禁的谓词之间求交，交集仍
-须有足够 yes/no、unknown 足够少、并通过平衡度门禁；这会稳定地限制组合数，不再
-枚举原实现那种深度 3 的所有交集。
+默认只做深度 1。``max_depth=2`` 时只在同根已通过门禁的谓词之间求交，交集仍须有
+足够 yes/no、unknown 足够少、并通过平衡度门禁，组合数因此是可控的。
 """
 
 from __future__ import annotations
@@ -66,7 +65,7 @@ def build_decisions(records: Sequence[Mapping[str, Any]], predicates: Sequence[M
         str(predicate["predicate_id"]): {"yes": set(), "no": set(), "unknown": set()}
         for predicate in predicates
     }
-    # 候选输出里的显示→id 反向映射不是必须的；新 step5 直接存 predicate_id。
+    # step5 的标签以 predicate_id 为键，所以不需要候选输出里的显示→id 反向映射。
     for record in records:
         labels = record.get("labels")
         if not isinstance(labels, Mapping):

@@ -1,9 +1,10 @@
 """语义合并的互斥门禁。
 
-向量相似度单独用会串味，原 ``semantic_attributes.py`` 已经用
-``_exclusive_signature`` 挡住「颜色、方向、否定、数值」相反的短语，这里在此
-基础上再补三个面，都是在实测里能举出反例的：
+向量相似度单独用会串味：颜色、方向、否定、数值相反的短语常常高度相似。下面几个
+面都是在实测里能举出反例的：
 
+- **语义不兼容的取值**：``not to the left`` 与 ``to the left``、
+  ``black`` 与 ``white`` 相似度不低，但取值相反。
 - **维度**：``walking to the left``（朝向）与 ``to the left`` 单独看很像，
   但前者是运动方向、后者可能是位置。
 - **施动者动词**：``walking to the left``（行人）与 ``driving to the left``

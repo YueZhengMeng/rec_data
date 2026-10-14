@@ -1,14 +1,17 @@
-"""JSONL 读写、原子写入与旧 JSON 产物的流式迁移。
+"""JSONL 读写、原子写入、运行标记，以及记录数组形式 JSON 的流式迁移。
 
 为什么统一用 JSONL
 ------------------
-实例表和提取结果分别有 28.6 万条记录（现存文件 108MB / 251MB）。旧实现
-（``step2_extract_attributes.py``）每写一条结果都要「读回整个文件 → 追加 →
-整体写回」，在 28.6 万条上是 O(n²) 的 IO，会先于 API 成为瓶颈。追加一行
-JSONL 只写一行，且天然支持中断续跑。
+实例表和提取结果分别有 28.6 万条记录（108MB / 251MB）。若每写一条结果都要
+「读回整个文件 → 追加 → 整体写回」，IO 在 28.6 万条上是 O(n²)，会先于 API 成为
+瓶颈；追加一行 JSONL 只写一行，且天然支持中断续跑。
 
-同时提供 :func:`load_json_any` / :func:`iter_json_any`，旧 ``.json`` 产物不
-转换也能直接读取，便于逐步迁移。
+:func:`load_json_any` / :func:`iter_json_any` 按后缀自动选择读取器，``.json``
+产物不转换也能直接读；``python -m recsub.io migrate`` 则把记录数组形式的 JSON
+转成 JSONL（流式解析，写出前校验条数）。
+
+断续跑所需的运行指纹不写在每一条记录里，而是旁挂一个 ``.run.json`` 标记文件，
+见 :func:`run_marker_path`。
 """
 
 from __future__ import annotations
@@ -19,8 +22,9 @@ import json
 import os
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 # 项目内 JSONL 记录一律紧凑、不转义非 ASCII，保证中文可读。
 _JSONL_KWARGS: dict[str, Any] = {"ensure_ascii": False, "separators": (",", ":")}
@@ -93,7 +97,7 @@ def done_keys(path: str | Path, keys: Sequence[str]) -> set[tuple]:
 
 
 def load_json_any(path: str | Path) -> Any:
-    """按后缀自动选择 JSON 或 JSONL 读取器，让旧产物不用转换即可使用。"""
+    """按后缀自动选择 JSON 或 JSONL 读取器，``.json`` 产物不用转换即可使用。"""
     path = Path(path)
     if path.suffix.lower() == ".jsonl":
         return load_jsonl(path)
@@ -109,7 +113,7 @@ def iter_json_any(path: str | Path) -> Iterator[dict]:
         return
     data = load_json_any(path)
     if isinstance(data, dict):
-        # 逐图嵌套的旧格式（图片名 -> caption -> 记录）摊平成迭代。
+        # 逐图嵌套的 .json（图片名 -> caption -> 记录）摊平成迭代。
         for key, value in data.items():
             yield {"__key__": key, "__value__": value}
         return
@@ -305,12 +309,47 @@ def close_all() -> None:
 
 
 # --------------------------------------------------------------------------
+# 运行标记
+# --------------------------------------------------------------------------
+RUN_MARKER_SUFFIX = ".run.json"
+
+
+def run_marker_path(output: str | Path) -> Path:
+    """旁挂运行标记的路径：在输出文件旁追加 ``.run.json``。
+
+    运行指纹是整次运行的常量。逐行重复既撑大结果文件，又让每条记录都背上与
+    自己无关的配置信息，因此单独存一份：结果文件只保留逐实例的数据。
+    """
+    output = Path(output)
+    return output.with_name(output.name + RUN_MARKER_SUFFIX)
+
+
+def read_run_fingerprint(output: str | Path) -> str | None:
+    """读标记里的指纹；标记不存在或没有指纹时返回 ``None``。"""
+    path = run_marker_path(output)
+    if not path.is_file():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    fingerprint = payload.get("fingerprint") if isinstance(payload, Mapping) else None
+    return str(fingerprint) if fingerprint else None
+
+
+def write_run_fingerprint(output: str | Path, fingerprint: str) -> Path:
+    """把这条输出路径认领给当前配置；同一次运行重复写是幂等的。"""
+    return write_json_atomic(run_marker_path(output), {
+        "fingerprint": fingerprint,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    })
+
+
+# --------------------------------------------------------------------------
 # 迁移
 # --------------------------------------------------------------------------
 def migrate_json_to_jsonl(source: str | Path, destination: str | Path, *,
                           expect_count: int | None = None,
                           overwrite: bool = False) -> int:
-    """把「记录数组」形式的旧 JSON 迁移成 JSONL。
+    """把「记录数组」形式的 JSON 迁移成 JSONL。
 
     流式解析源文件，因此 251MB 的提取结果也不会把内存吃满。写出前校验条数，
     数量不符则删除临时文件并报错，避免半成品覆盖好数据。
@@ -348,7 +387,7 @@ def migrate_json_to_jsonl(source: str | Path, destination: str | Path, *,
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m recsub.io",
-        description="JSONL 工具：迁移旧 JSON 产物、校验条数",
+        description="JSONL 工具：迁移记录数组形式的 JSON、校验条数",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

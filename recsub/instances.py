@@ -1,9 +1,9 @@
-"""实例表的读取、父 caption 索引，以及与下游产物的配对。
+"""实例表的读取、父 caption 索引，以及与提取产物的配对。
 
-存在旧格式的产物：``anno/extract_result.jsonl`` 里的 28.6 万条只有
-``instance_id`` 和 ``attributes``，没有图片名、caption、类别。为了让这些已经花过
-钱的历史结果不必重跑，这里做一层归并式配对——两份文件都按 ``instance_id`` 递增
-排列，所以内存是 O(1)，而不是先建 28.6 万条的索引字典。
+只带 ``instance_id`` 与 ``attributes``、没有图片名/caption/类别的提取记录（例如
+迁移自记录数组形式 JSON 的产物）仍然可用：这里做一层归并式配对，靠 ``instance_id``
+与实例表对齐。两份文件都按 ``instance_id`` 递增排列，所以内存是 O(1)，不必先建
+28.6 万条的索引字典。
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ def enrich_with_instances(records: Iterator[Mapping[str, Any]],
                           instance_path: str | Path) -> Iterator[dict]:
     """把缺图片信息的提取记录补上 ``image_name`` / ``caption`` / ``category``。
 
-    已经是新格式（step3 产出，自带这些字段）的记录原样透传。旧格式按
+    step3 产出的记录自带这些字段，原样透传。只带 ``instance_id`` 的记录按
     ``instance_id`` 与实例表归并配对；``instance_id`` 重复出现时复用上一次的配对
-    结果，这样带重复记录的历史结果也能跑。
+    结果，这样带重复行的提取文件也能跑。
     """
     instances = iter_jsonl(instance_path)
     pending: Mapping[str, Any] | None = next(instances, None)

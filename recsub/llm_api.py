@@ -1,13 +1,11 @@
 """在线多模态调用：客户端、并发闸门、重试，以及三视图裁剪。
 
-把原 ``llm_api_async.py`` 与 ``agents.py`` 合并成一层。与原实现的差别：
+:class:`OnlineModel` 把端点、并发闸门与重试策略绑在一起，并且必须在事件循环内
+创建——并发信号量随实例创建，不在导入时构造 asyncio 原语。调用方拿到的是结构化
+的 :class:`Completion`，而不是整段 messages，避免把 base64 图片写进结果文件。
 
-- 并发信号量不再是一个模块级全局，而是随 :class:`OnlineModel` 一起创建，
-  避免在导入时构造 asyncio 原语。
-- ``enable_thinking`` 可配。判断阶段的 output token 由思维链主导（实测均值
-  3187，而提取阶段只有 878），需要时能关掉实测。
-- 返回值是结构化 :class:`Completion` 而不再把整段 messages（含 base64 图片）
-  传回调用方——原实现要额外小心才不会把图片写进结果文件。
+模型名、端点、并发数、重试次数、超时与 ``enable_thinking`` 的默认值都来自
+``recsub/config.py`` 的 ``online`` 段，判断步骤可用 ``--no-enable-thinking`` 覆盖。
 """
 
 from __future__ import annotations
@@ -45,36 +43,28 @@ class OnlineModel:
     client: AsyncOpenAI
     model_name: str
     semaphore: asyncio.Semaphore
-    max_retries: int = 3
-    enable_thinking: bool = True
+    max_retries: int
+    enable_thinking: bool
 
     @classmethod
     def create(
             cls,
             *,
-            api_key: str | None = None,
-            base_url: str | None = None,
-            model_name: str | None = None,
             concurrency: int | None = None,
             max_retries: int | None = None,
-            timeout: float | None = None,
             enable_thinking: bool | None = None,
-            config: Mapping[str, Any] | None = None,
     ) -> "OnlineModel":
-        settings = dict((config or CONFIG)["llm"])
-        resolved_key = api_key if api_key is not None else (config or CONFIG).get("api_key")
-        if not resolved_key:
+        settings = CONFIG["online"]
+        api_key = CONFIG.get("api_key")
+        if not api_key:
             raise RuntimeError("未设置 DASHSCOPE_API_KEY，无法调用在线模型")
-        resolved_model = model_name or (config or CONFIG)["model_name"]
-        resolved_base = base_url or (config or CONFIG)["base_url"]
-        resolved_timeout = timeout if timeout is not None else settings["timeout"]
         client = AsyncOpenAI(
-            api_key=resolved_key,
-            base_url=resolved_base,
-        ).with_options(timeout=resolved_timeout)
+            api_key=api_key,
+            base_url=CONFIG["base_url"],
+        ).with_options(timeout=settings["timeout"])
         return cls(
             client=client,
-            model_name=resolved_model,
+            model_name=CONFIG["model_name"],
             semaphore=asyncio.Semaphore(concurrency or settings["concurrency"]),
             max_retries=max_retries if max_retries is not None else settings["max_retries"],
             enable_thinking=(settings["enable_thinking"]
@@ -174,9 +164,9 @@ def load_three_views(
     return images[0], images[1], images[2], crops.metadata
 
 
-def build_cropper(instances, config: Mapping[str, Any] | None = None) -> AdaptiveCropper:
-    """用完整实例表构建密度索引；密度必须来自全量点，不能只喂抽样。"""
-    return AdaptiveCropper.from_instances(instances, crop_config(config))
+def build_cropper(instances) -> AdaptiveCropper:
+    """用完整实例表建立密度索引，裁剪参数取自 ``CONFIG["crop"]``。"""
+    return AdaptiveCropper.from_instances(instances, crop_config())
 
 
 __all__ = [

@@ -1,6 +1,4 @@
-"""step6：门禁筛选 + 三值分区子集（原 step5）。
-
-默认逻辑不再枚举所有条件交集，而是：
+"""step6：门禁筛选 + 三值分区子集。
 
 1. 对每个 (image, caption, predicate) 聚合 yes/no/unknown；
 2. 用 G1–G3/G5 过滤（支持、补集、unknown、平衡、父冗余）；
@@ -8,8 +6,9 @@
 4. 通过的谓词输出显式三值分区，并可输出一个 ``not predicate`` 兄弟节点；
 5. ``--max-depth 2`` 时只对已通过的一层谓词求交，交集仍须过门禁。
 
-每条拒绝理由和实际数值写入 ``subset_decisions_log.jsonl``。这份日志不是垃圾：
-它告诉你某张图/某个 caption 为什么不可划分，也直接支撑人工审核的候选清单。
+门禁默认值取自 ``recsub/config.py`` 的 ``gates`` 段，每条拒绝理由和实际数值写入
+``subset_decisions_log.jsonl``。这份日志不是垃圾：它告诉你某张图/某个 caption 为什么
+不可划分，也直接支撑人工审核的候选清单。
 
 人工审核回读由 step7 完成；step6 的输出 ``review.status=pending``。
 
@@ -30,6 +29,7 @@ from recsub.config import CONFIG, path
 from recsub.console import configure_console
 from recsub.gates import GateSettings
 from recsub.io import iter_jsonl, write_jsonl_atomic
+from recsub.normalize import flatten_candidates
 from recsub.subsets import build_tree, stable_id
 
 
@@ -41,7 +41,7 @@ def load_candidates(path_: Path) -> tuple[dict[tuple[str, str], list[dict]], dic
     for image_name, captions in payload.items():
         for caption, entry in captions.items():
             key = (str(image_name), str(caption))
-            result[key] = list(entry.get("predicates") or ())
+            result[key] = flatten_candidates(entry)
             parent_ids[key] = entry.get("parent_predicate_id")
     return result, parent_ids
 
@@ -126,8 +126,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-predicates-per-root", type=int,
                         default=CONFIG["gates"]["max_predicates_per_root"])
     parser.add_argument("--max-depth", type=int, default=CONFIG["gates"]["max_depth"])
-    parser.add_argument("--no-complement", dest="emit_complement", action="store_false",
-                        default=CONFIG["gates"]["emit_complement"])
+    parser.add_argument("--emit-complement", action=argparse.BooleanOptionalAction,
+                        default=CONFIG["gates"]["emit_complement"],
+                        help="为通过门禁的谓词生成否定侧兄弟子集")
     return parser.parse_args(argv)
 
 

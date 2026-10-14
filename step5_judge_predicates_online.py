@@ -1,116 +1,62 @@
-"""step5：逐实例闭集三值判断（原 step4）。
+"""step5 在线入口：逐实例闭集三值判断。
 
-与原版的关键差别：
-
-1. **失败与「看不见」分开**。原实现把调用失败/解析失败也写成 unknown 并计入
-   已完成集合，重跑会直接跳过这些实例——判断损失被永久当成视觉 unknown。现在
-   失败记录带 ``judgment_failed`` 标记，**不计入已完成集合**，重跑自动重试。
+1. **失败与「看不见」分开**。调用失败/解析失败写成 ``judgment_failed`` 记录，
+   既不计入 unknown 也不计入已完成集合，重跑自动重试。
 2. **用规范写法发问**。同一个谓词在所有实例上问法一致（如 ``wearing helmet``
-   而不是各实例自己的措辞），标签才可比。否定谓词带上 ``not``，直接对上原数据里
-   ``not X`` 的根。
-3. **输出 JSONL 追加写**，可中断续跑。
-4. **两个成本杠杆**：``--no-thinking`` 关掉思维链（判断的 output token 实测均值
-   3187，由思维链主导）；``--probe-per-caption`` 先判每个根的一小部分实例，把
+   而不是各实例自己的措辞），标签才可比。否定谓词带上 ``not``。
+3. **输出 JSONL 追加写**，可中断续跑；运行指纹写在旁挂标记文件里。
+4. **两个成本杠杆**：``--no-enable-thinking`` 关掉思维链（判断的 output token 由
+   思维链主导，实测均值 3187）；``--probe-per-caption`` 先判每个根的一小部分实例，把
    几乎恒定的条件从这个根上剪掉，再判其余实例。探针轮的标签不会被浪费——对存活
    下来的条件，那些标签本来就算数，过滤后保留，于是同一个根内所有实例的问句集合
    保持一致。
 
-    python step5_judge_predicates.py --image-names 0002-fsc147-1386.jpg
-    python step5_judge_predicates.py --probe-per-caption 6 --no-thinking
+    python step5_judge_predicates_online.py --image-names 0002-fsc147-1386.jpg
+    python step5_judge_predicates_online.py --probe-per-caption 6 --no-enable-thinking
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import sys
 from collections import Counter, defaultdict
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
-from recsub.config import CONFIG, path
+from recsub.config import CONFIG, crop_config, path
 from recsub.console import configure_console
+from recsub.extract import file_digest, run_fingerprint
 from recsub.io import (
     close_all,
-    done_ids,
     get_writer,
     iter_jsonl,
     write_json_atomic,
 )
-from recsub.llm import OnlineModel, build_cropper, load_three_views
-from recsub.prompts import build_instance_messages, build_judgment_prompt
-from recsub.utils import match_json
-
-LABELS = ("yes", "no", "unknown")
-Sink = Callable[[dict], Awaitable[None]]
-
-
-def load_caption_predicates(candidates_path: Path) -> tuple[dict, dict, dict]:
-    """读 step4 的候选，整理成「根 → 谓词列表 / 问句列表 / 问句→id」。
-
-    同一个规范写法可能对应多个 predicate_id（例如同为 ``white`` 的颜色与材质），
-    因此问句按写法去重，标签再展开回所有同写法的 id。
-    """
-    with candidates_path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-
-    by_root: dict[tuple[str, str], list[dict]] = {}
-    phrases_by_root: dict[tuple[str, str], tuple[str, ...]] = {}
-    ids_by_display: dict[tuple[str, str], dict[str, list[str]]] = {}
-    for image_name, captions in payload.items():
-        for caption, entry in captions.items():
-            key = (str(image_name), str(caption))
-            predicates = list(entry.get("predicates") or ())
-            by_root[key] = predicates
-            display_map: dict[str, list[str]] = defaultdict(list)
-            ordered: list[str] = []
-            for predicate in predicates:
-                display = str(predicate.get("display") or predicate.get("value") or "")
-                if not display:
-                    continue
-                if display not in display_map:
-                    ordered.append(display)
-                display_map[display].append(str(predicate["predicate_id"]))
-            phrases_by_root[key] = tuple(ordered)
-            ids_by_display[key] = dict(display_map)
-    return by_root, phrases_by_root, ids_by_display
+from recsub.judgment import (
+    build_work, completed_judgments, expand_labels, load_caption_predicates,
+    parse_labels, ratio_prune, restrict_labels,
+)
+from recsub.llm_api import OnlineModel, build_cropper, load_three_views
+from recsub.prompts import PREDICATE_JUDGMENT_PROMPT, build_instance_messages, build_judgment_prompt
 
 
-def parse_labels(content: str, phrases: Sequence[str]) -> dict[str, str] | None:
-    """解析判断输出；缺项与非法值记为 unknown。``None`` 表示整体解析失败。"""
-    parsed = match_json(content)
-    if not isinstance(parsed, dict):
-        return None
-    raw = parsed.get("labels")
-    if not isinstance(raw, Mapping):
-        return None
-    return {phrase: (raw.get(phrase) if isinstance(raw.get(phrase), str)
-                                        and raw.get(phrase) in LABELS else "unknown")
-            for phrase in phrases}
-
-
-def build_work(instances: Iterable[Mapping[str, Any]], phrases_by_root, completed: set[int],
-               image_names: set[str] | None) -> dict[tuple[str, str], list[dict]]:
-    """按根收集待判实例；只保留判断需要的字段，控制 28.6 万条时的内存。"""
-    work: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for instance in instances:
-        instance_id = instance["instance_id"]
-        if instance_id in completed:
-            continue
-        if image_names is not None and instance["image_name"] not in image_names:
-            continue
-        key = (str(instance["image_name"]), str(instance["caption"]))
-        if key not in phrases_by_root:
-            continue
-        work[key].append({
-            "instance_id": instance_id,
-            "image_name": instance["image_name"],
-            "caption": instance["caption"],
-            "category": instance["category"],
-            "point": instance["point"],
-        })
-    return dict(work)
+def judgment_fingerprint(args: argparse.Namespace) -> str:
+    """绑定候选顺序、裁剪与判断参数；更换其中任一项后必须用新的输出文件。"""
+    return run_fingerprint({
+        "backend": "online",
+        "candidates_sha256": file_digest(args.candidates),
+        "instances_sha256": file_digest(args.instances),
+        "image_dir": str(Path(args.image_dir).resolve()),
+        "model": CONFIG["model_name"], "enable_thinking": args.enable_thinking,
+        "probe_per_caption": args.probe_per_caption,
+        "probe_min_instances": args.probe_min_instances,
+        "constant_yes_ratio": args.constant_yes_ratio,
+        "constant_no_ratio": args.constant_no_ratio,
+        "crop": asdict(crop_config()),
+        "prompt": PREDICATE_JUDGMENT_PROMPT,
+    })
 
 
 async def judge_one(online: OnlineModel, cropper, item: Mapping[str, Any],
@@ -133,7 +79,7 @@ async def judge_one(online: OnlineModel, cropper, item: Mapping[str, Any],
 
     completion = await online.complete(build_instance_messages(
         global_image, context_image, fine_image,
-        build_judgment_prompt(str(item["caption"]), str(item["category"]), list(phrases)),
+        build_judgment_prompt(str(item.get("attributes") or ""), str(item["category"]), list(phrases)),
     ))
     if completion is None:
         return {**base, "judgment_failed": True, "reason": "在线调用失败"}
@@ -141,52 +87,8 @@ async def judge_one(online: OnlineModel, cropper, item: Mapping[str, Any],
     labels = parse_labels(completion.content, phrases)
     if labels is None:
         return {**base, "judgment_failed": True, "reason": "输出解析失败",
-                **completion.usage(), "attempts": completion.attempts}
-    return {**base, "labels": labels, **completion.usage(), "attempts": completion.attempts}
-
-
-def restrict_labels(record: Mapping[str, Any], keep: Sequence[str]) -> dict:
-    """把记录的问句标签过滤到 ``keep`` 集合，供剪枝后复用探针结果。"""
-    labels = record.get("labels")
-    if not isinstance(labels, Mapping):
-        return dict(record)
-    return {**record, "labels": {phrase: labels[phrase] for phrase in keep if phrase in labels}}
-
-
-def expand_labels(record: Mapping[str, Any], ids_by_display: Mapping[str, list[str]]) -> dict:
-    """把「问句 → 标签」展开成「predicate_id → 标签」。"""
-    labels = record.get("labels")
-    if not isinstance(labels, Mapping):
-        return dict(record)
-    expanded: dict[str, str] = {}
-    for display, label in labels.items():
-        for predicate_id in ids_by_display.get(display, ()):
-            expanded[predicate_id] = label
-    return {**record, "labels": expanded}
-
-
-def ratio_prune(records: Iterable[Mapping[str, Any]], phrases: Sequence[str],
-                yes_ratio: float, no_ratio: float, min_instances: int) -> tuple[list[str], list[str]]:
-    """从探针标签里挑出「几乎恒定」的问句；返回 (保留, 剪掉)。"""
-    tally = {phrase: Counter() for phrase in phrases}
-    for record in records:
-        labels = record.get("labels")
-        if not isinstance(labels, Mapping):
-            continue
-        for phrase in phrases:
-            label = labels.get(phrase)
-            if label in LABELS:
-                tally[phrase][label] += 1
-    kept, pruned = [], []
-    for phrase in phrases:
-        counted = sum(tally[phrase][label] for label in LABELS)
-        if counted < min_instances:
-            # 样本太少不能下结论，宁可多花 token 也不能误剪。
-            kept.append(phrase)
-            continue
-        yes_share = tally[phrase]["yes"] / counted
-        (pruned if yes_share >= yes_ratio or yes_share <= no_ratio else kept).append(phrase)
-    return kept, pruned
+                **completion.usage()}
+    return {**base, "labels": labels, **completion.usage()}
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -194,7 +96,10 @@ async def run(args: argparse.Namespace) -> int:
     with_predicates = sum(1 for phrases in phrases_by_root.values() if phrases)
     print(f"✅ 候选根 {len(by_root)} 个，其中 {with_predicates} 个有候选谓词")
 
-    completed = done_ids(args.output, exclude_flag="judgment_failed")
+    fingerprint = judgment_fingerprint(args)
+    completed, prior_rows = completed_judgments(args.output, fingerprint)
+    if prior_rows and args.probe_per_caption > 0:
+        raise ValueError("探针模式在部分写入后不能安全重算剪枝；请指定新的 --output")
     if completed:
         print(f"发现已有结果：跳过 {len(completed)} 个已判断实例")
 
@@ -323,24 +228,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--image-dir", default=CONFIG["image_dir"],
                         help="原图目录")
     parser.add_argument("--output", type=Path, default=path("predicate_labels"))
-    parser.add_argument("--constant-output", type=Path, default=Path("anno/predicate_constant.json"),
+    parser.add_argument("--constant-output", type=Path, default=path("predicate_constant"),
                         help="探针剪掉的「根×恒定条件」记录")
     parser.add_argument("--image-names", default=None)
-    parser.add_argument("--batch-size", type=int, default=CONFIG["llm"]["batch_size"])
-    parser.add_argument("--concurrency", type=int, default=None)
-    parser.add_argument("--max-retries", type=int, default=None)
-    parser.add_argument("--enable-thinking", dest="enable_thinking", action="store_true",
-                        default=CONFIG["llm"]["enable_thinking"])
-    parser.add_argument("--no-thinking", dest="enable_thinking", action="store_false",
-                        help="关闭思维链；判断的 output token 由思维链主导，值得实测")
-    parser.add_argument("--probe-per-caption", type=int, default=0,
+    parser.add_argument("--batch-size", type=int, default=CONFIG["online"]["batch_size"])
+    parser.add_argument("--concurrency", type=int, default=CONFIG["online"]["concurrency"])
+    parser.add_argument("--max-retries", type=int, default=CONFIG["online"]["max_retries"])
+    parser.add_argument("--enable-thinking", action=argparse.BooleanOptionalAction,
+                        default=CONFIG["online"]["enable_thinking"],
+                        help="是否启用思维链；判断的 output token 由思维链主导，"
+                             "--no-enable-thinking 值得实测")
+    parser.add_argument("--probe-per-caption", type=int,
+                        default=CONFIG["judge"]["probe_per_caption"],
                         help="探针轮每根先判这么多实例以剪掉恒定条件；0 表示全量判断")
-    parser.add_argument("--probe-min-instances", type=int, default=4,
+    parser.add_argument("--probe-min-instances", type=int,
+                        default=CONFIG["judge"]["probe_min_instances"],
                         help="探针至少要判这么多实例才敢剪枝，样本不足时宁可多花 token")
     parser.add_argument("--constant-yes-ratio", type=float,
-                        default=CONFIG["gates"]["constant_yes_ratio"])
+                        default=CONFIG["judge"]["constant_yes_ratio"])
     parser.add_argument("--constant-no-ratio", type=float,
-                        default=CONFIG["gates"]["constant_no_ratio"])
+                        default=CONFIG["judge"]["constant_no_ratio"])
     return parser.parse_args(argv)
 
 

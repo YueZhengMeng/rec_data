@@ -1,17 +1,20 @@
 """按标注点生成密度自适应的三视图裁剪。
 
-从原 ``crop.py`` 迁入，两处实质改动：
+标注只给一个点，所以尺度靠「同图同类别」内近邻点的密度估计：近邻足够多就用
+近邻距离定标，稀疏或缺失时按比例回退。每个实例裁出三张图——全局图（整图 +
+标记）、上下文图（目标与周围）、局部图（目标附近的细节）。
 
-1. **标记样式**。原实现是「轮廓环 + 环外四根引线」，环本身不填充，但环上
-   叠了一圈最宽 7px 的白色高光；对密集场景里边界只有十几像素的小目标，
-   这圈高光正好压在目标的轮廓上。新增 ``marker_style="outline"``：环半径更
-   小、描边更细、高光收窄到与描边同宽、引线更短，目标是尽量少覆盖判定所
-   要看的像素。需要说明的是——标注只给了一个点，**无法求出目标的真实轮廓**，
-   所以这里能做的只是「少遮挡」，不是「沿物体描边」。
-   ``marker_style="ring"`` 保留原行为，便于与旧结果对比。
+两处设计取舍：
 
-2. **局部视图分辨率**。fine / context 从 512 提到 768，小目标的部件需要更多
-   像素才能判读。
+1. **标记样式**。``marker_style="outline"`` 用更小的环、更细的描边、更窄的白色
+   高光与更短的引线，尽量少覆盖判定要看的像素；``"ring"`` 是另一套样式，环更大、
+   高光更宽、引线更长。标注只有一个点、**无法求出目标的真实轮廓**，所以这里能做
+   的只是「少遮挡」，不是「沿物体描边」。
+2. **局部视图分辨率**。fine / context 的输出边长是可调的：像素越多，密集场景里小
+   目标的部件越清楚，token 与显存开销也越大。
+
+具体数值来自 ``recsub/config.py`` 的 ``crop`` 段（该段未列出的字段用
+:class:`CropConfig` 自己的默认值），各字段的取值理由也写在那一处。
 """
 
 from __future__ import annotations
@@ -61,16 +64,16 @@ class CropConfig:
     sparse_fallback_ratio: float = 0.25
     context_multiplier: float = 2.0
 
-    # 两级局部视图的输出边长；从 512 提到 768 以保留小目标的部件细节。
-    fine_output_size: int | None = 768
-    context_output_size: int | None = 768
+    # 两级局部视图的输出边长；管线运行时由 recsub/config.py 的 crop 段提供。
+    fine_output_size: int | None = 512
+    context_output_size: int | None = 512
 
     # ---- 标记 ----
     marker_style: MarkerStyle = "outline"
     marker_color: tuple[int, int, int, int] = (255, 32, 32, 235)
     marker_halo_color: tuple[int, int, int, int] = (255, 255, 255, 245)
 
-    # ring 样式（原实现）的参数。
+    # ring 样式的参数：环更大、白色高光更宽、引线更长。
     marker_radius_ratio: float = 0.025
     marker_radius_min: int = 6
     marker_radius_max: int = 18
@@ -529,7 +532,7 @@ def _draw_ring_marker(
         radius_min: int | None = None,
         radius_max: int | None = None,
 ) -> Image.Image:
-    """原实现：轮廓环 + 较宽白色高光 + 环外四根引线。"""
+    """ring 样式：轮廓环 + 较宽白色高光 + 环外四根引线。"""
     marked_image = image.convert("RGBA")
     overlay = Image.new("RGBA", marked_image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -583,8 +586,8 @@ def _draw_outline_marker(
 ) -> Image.Image:
     """收紧版标记：更小的环、更细的描边、与描边同宽的窄高光、更短的引线。
 
-    标注只有一个点，无法得到目标真实轮廓；这里的目标是**减少覆盖**——
-    原实现那圈最宽 7px 的白色高光会正好压在密集场景里小目标的边界上。
+    标注只有一个点，无法得到目标真实轮廓；这里的目标是**减少覆盖**——ring 样式那圈
+    较宽的白色高光会正好压在密集场景里小目标的边界上。
     """
     marked_image = image.convert("RGBA")
     overlay = Image.new("RGBA", marked_image.size, (0, 0, 0, 0))
@@ -756,4 +759,4 @@ def _visualize_random_samples(sample_count: int = 10) -> None:
 
 
 if __name__ == "__main__":
-    _visualize_random_samples(sample_count=10)
+    _visualize_random_samples(sample_count=100)

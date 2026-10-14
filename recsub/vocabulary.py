@@ -4,11 +4,10 @@
 ------------------
 原数据的标注词其实很少：按 (类别, 维度) 统计，person 的 action 43 /
 orientation 11 / age 3 / gender 2 撑起绝大部分实例量，car 全部维度合计只有
-34 个取值。把它固定下来有三个直接好处：
+34 个取值。把它固定下来有两个直接好处：
 
-1. step3 的开放提取可以用它做 few-shot，引导模型产出可跨图复用的措辞；
-2. step4 把候选词归一化到这些槽位，而不是每次重新发明字符串；
-3. 「新谓词是否带来增量」这个消融，需要一个明确的「仅原词表」基线。
+1. step4 把候选词归一化到这些槽位，而不是每次重新发明字符串；
+2. 「新谓词是否带来增量」这个消融，需要一个明确的「仅原词表」基线。
 
 关键设计
 --------
@@ -18,8 +17,8 @@ orientation 11 / age 3 / gender 2 撑起绝大部分实例量，car 全部维度
   会合并，而 ``walking to the left``（行人的运动方向）与 ``facing left``
   （静态朝向）不会——它们在原数据里本来就是不同的根。
 - ``scope`` 只作为**标记**，不删除条目：``in the first left queue`` 这类
-  场景相对取值会被排除出 few-shot，因为拿它当例子恰好会教模型写出不可复用
-  的词；但它仍然保留在词表里，便于统计与人工判断。
+  场景相对取值绑在单张图的布局上，step4 不会把它当作「同类不相似」的补充候选；
+  但它仍然保留在词表里，便于统计与人工判断。
 - 人工可以用 ``vocabulary_overrides.json`` 改名、合并、删除、加别名，
   不必改代码。
 """
@@ -153,7 +152,7 @@ class Slot:
 
     @property
     def display(self) -> str:
-        """还原成数据集的自然写法，用于 few-shot 与可视化。
+        """还原成数据集的自然写法，用于提示词与可视化。
 
         否定条目必须把 ``not`` 带上：否则 ``not in the queue`` 与 ``in the queue``
         会给出同一个别名，索引时按字母序 negative 在前，正例词反而被匹配到否定槽位。
@@ -315,7 +314,7 @@ def build_vocabulary(
         annotations: Mapping[str, Mapping[str, Mapping[str, Any]]],
         *,
         split_keys: set[tuple[str, str]] | None = None,
-        min_root_count: int = 2,
+        min_root_count: int = 1,
 ) -> tuple[list[Predicate], dict[str, int]]:
     """统计标注词并归一化成谓词条目。
 
@@ -541,39 +540,6 @@ class Vocabulary:
         """父 caption 自身的槽位；step4 用它硬过滤与父集同义的候选。"""
         return normalize_attribute(category, dimension, attribute)
 
-    # ---- few-shot ----
-    def fewshot(self, category: str, *, exclude_slots: Iterable[Slot] = (),
-                per_dimension: int = 8, total: int = 24) -> dict[str, list[str]]:
-        """按维度挑选 few-shot 示例。
-
-        两条过滤规则都是有依据的：
-        - 剔除该实例父 caption 自己的槽位及其别名，避免模型把父属性再吐一遍
-          （现有数据里 253 个「caption－候选词」组合有 55 个是这种全 yes）；
-        - 剔除 scene_relative 取值，拿 ``in the first left queue`` 当例子
-          恰好会教模型写出跨图不可复用的词。
-        """
-        excluded = {slot.key() for slot in exclude_slots}
-        grouped = self.dimensions_of(category)
-        result: dict[str, list[str]] = {}
-        budget = total
-        # 先给维度按「最大取值数」排序，让预算优先落在信息量大的维度上。
-        for dimension in sorted(grouped, key=lambda name: -len(grouped[name])):
-            if budget <= 0:
-                break
-            pool = [
-                entry for entry in grouped[dimension]
-                if entry.slot.key() not in excluded
-                   and entry.scope == "absolute"
-                   and entry.polarity == "positive"
-            ]
-            if not pool:
-                continue
-            pool.sort(key=lambda entry: (-entry.instance_count, entry.value))
-            take = min(per_dimension, budget, len(pool))
-            result[dimension] = [entry.display for entry in pool[:take]]
-            budget -= take
-        return result
-
     # ---- 序列化 ----
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -616,7 +582,7 @@ class Vocabulary:
                  f"- 构建时间：{self.metadata.get('generated_at', '—')}",
                  "",
                  "`scene_relative` 标记表示该取值绑在这张图的布局上（如"
-                 " `in the first left queue`），会被排除出 few-shot，但保留在词表里。",
+                 " `in the first left queue`），step4 不会把它当作补充候选，但保留在词表里。",
                  ""]
         for category in self.categories():
             lines.append(f"## {category}")

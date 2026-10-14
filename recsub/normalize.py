@@ -1,11 +1,11 @@
-"""把开放提取出来的候选短语归一化到词表槽位（原 step3 的替代）。
+"""把开放提取出来的候选短语归一化到词表槽位（step4 的核心）。
 
 三级流程，逐级放宽，只有真的判不了才交给 LLM：
 
 1. **规则级**：精确写法 / 别名 / 模式规则（``Vocabulary.match``）。免费且确定。
-2. **向量级**：同类别词表条目里做相似度匹配，但必须先过
-   :func:`recsub.similarity.compatible` 的互斥门禁（维度、施动者、锚点、颜色、
-   方向、否定、数值），并且要求最相似项比次相似项高出 ``margin``。
+2. **向量级**：在全词表条目中做相似度匹配，并按命中条目的类别标记同类/跨类；
+   必须先过 :func:`recsub.similarity.compatible` 的互斥门禁（维度、施动者、锚点、
+   颜色、方向、否定、数值），且要求最相似写法比次相似写法高出 ``margin``。
    只有 ``white laces`` 相对 ``white`` 这种**细化**关系不参与合并——按相似度并进
    去会吃掉「鞋带是白的」这个新信息，最后因为与父属性同义而被丢掉。
 3. **LLM 尾部**：按类别批量一次调用，要求逐条给出 ``match`` / ``new`` / ``drop``。
@@ -50,16 +50,32 @@ METHOD_ORDER = (METHOD_EXACT, METHOD_RULE, METHOD_VALUE,
 DROP_PARENT_REDUNDANT = "parent_redundant"
 DROP_LLM = "llm_drop"
 DROP_UNRESOLVED = "unresolved"
+DROP_CROSS_CAPTION_STRING = "cross_caption_string_duplicate"
 
 EXTRACT_FIELDS = ("appearance", "action", "location", "relation")
+CANDIDATE_TIERS = ("same_category_similar", "cross_category_similar",
+                   "same_category_dissimilar", "llm_tail")
+
+
+def flatten_candidates(entry: Mapping[str, Any]) -> list[dict]:
+    """读取紧凑的四类候选；没有 ``candidates`` 时退回去读扁平的 ``predicates`` 列表。"""
+    if "candidates" in entry:
+        groups = entry["candidates"]
+        return [{**item, "selection_tier": tier,
+                 "category": item.get("category") or entry.get("category") or "",
+                 "verb": item.get("verb"),
+                 "polarity": item.get("polarity") or "positive",
+                 "source": item.get("source") or "reused"}
+                for tier in CANDIDATE_TIERS
+                for item in groups.get(tier, ())]
+    return list(entry.get("predicates") or ())
 
 
 def extracted_attributes(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    """取出模型提取的属性字典，兼容两种历史布局。
+    """取出模型提取的属性字典。
 
-    - ``anno/extract_result.json``（28.6 万条历史结果）：``attributes`` 是原始标注
-      串（如 ``"red"``），提取结果在 ``more_attributes`` 里；
-    - step3 的新格式：提取结果直接在 ``attributes`` 里。
+    step3 的记录把提取结果直接放在 ``attributes`` 里；只带 ``instance_id`` 的记录
+    把原始标注串放在那里，模型输出放在 ``more_attributes`` 里，因此两者都要看。
     """
     for field in ("more_attributes", "attributes"):
         value = record.get(field)
@@ -74,7 +90,9 @@ class PhraseEvidence:
 
     phrase: str
     field: str  # 来自 extract 的哪个字段（appearance/action/...）
-    instance_count: int  # 写出该短语的实例数，是聚合强度的直接信号
+    instance_count: int  # 写出该短语的不同实例数
+    instance_ids: frozenset[int] = frozenset()
+    raw_phrases: tuple[str, ...] = ()
 
 
 @dataclass
@@ -92,6 +110,9 @@ class Candidate:
     raw_phrases: tuple[str, ...]
     instance_count: int
     field: str
+    selection_tier: str = ""
+    selection_rank: int = 0
+    supporting_ids: set[int] = field(default_factory=set, repr=False)
 
     @property
     def display(self) -> str:
@@ -117,6 +138,8 @@ class Candidate:
             "raw_phrases": list(self.raw_phrases),
             "instance_count": self.instance_count,
             "field": self.field,
+            "selection_tier": self.selection_tier,
+            "selection_rank": self.selection_rank,
         }
 
 
@@ -125,6 +148,7 @@ class Dropped:
     phrase: str
     reason: str
     detail: str = ""
+    predicate_id: str = ""
 
 
 @dataclass
@@ -137,6 +161,7 @@ class CaptionResult:
     candidates: list[Candidate] = field(default_factory=list)
     dropped: list[Dropped] = field(default_factory=list)
     unresolved: list[PhraseEvidence] = field(default_factory=list)
+    open_phrase_groups: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ============================================================
@@ -185,20 +210,26 @@ def iter_caption_groups(records: Iterable[Mapping[str, Any]]) -> Iterator[tuple[
 
 
 def collect_evidence(records: Sequence[Mapping[str, Any]]) -> list[PhraseEvidence]:
-    """统计每个短语被多少个实例写出，并按实例数降序返回。"""
+    """同一实例跨字段重复说出一个短语也只算一次支持。"""
     counters: dict[str, Counter] = {}
-    for record in records:
+    supporters: dict[str, set[int]] = defaultdict(set)
+    for index, record in enumerate(records):
         attributes = extracted_attributes(record)
         if attributes is None:
             continue
+        instance_id = int(record.get("instance_id", -(index + 1)))
+        seen: set[str] = set()
         for field_name in EXTRACT_FIELDS:
             for phrase in attributes.get(field_name) or ():
                 text = str(phrase).strip()
-                if not text:
+                if not text or text in seen:
                     continue
+                seen.add(text)
                 counters.setdefault(text, Counter())[field_name] += 1
+                supporters[text].add(instance_id)
     evidence = [
-        PhraseEvidence(phrase, field_counter.most_common(1)[0][0], field_counter.most_common(1)[0][1])
+        PhraseEvidence(phrase, field_counter.most_common(1)[0][0], len(supporters[phrase]),
+                       frozenset(supporters[phrase]))
         for phrase, field_counter in counters.items()
     ]
     evidence.sort(key=lambda item: (-item.instance_count, item.phrase))
@@ -206,99 +237,228 @@ def collect_evidence(records: Sequence[Mapping[str, Any]]) -> list[PhraseEvidenc
 
 
 def merge_evidence(accumulator: dict[str, list], evidence: Sequence[PhraseEvidence]) -> None:
-    """把一组证据累加进 ``{短语: [字段, 实例数]}``，用于同一个键被拆成多组时合并。"""
+    """跨非连续分组按 instance_id 并集计数，不重复计算续跑记录。"""
     for item in evidence:
         existing = accumulator.get(item.phrase)
         if existing is None:
-            accumulator[item.phrase] = [item.field, item.instance_count]
+            accumulator[item.phrase] = [item.field, set(item.instance_ids),
+                                        0 if item.instance_ids else item.instance_count]
         else:
-            existing[1] += item.instance_count
+            existing[1].update(item.instance_ids)
+            if not item.instance_ids:
+                existing[2] += item.instance_count
 
 
 def accumulator_to_evidence(accumulator: Mapping[str, Sequence]) -> list[PhraseEvidence]:
-    evidence = [PhraseEvidence(phrase, str(value[0]), int(value[1]))
+    evidence = [PhraseEvidence(phrase, str(value[0]), len(value[1]) + int(value[2]),
+                               frozenset(value[1]))
                 for phrase, value in accumulator.items()]
     evidence.sort(key=lambda item: (-item.instance_count, item.phrase))
     return evidence
 
 
 # ============================================================
-# 二、三级归一化
+# 二、归一化（规则 → 全词表向量 → LLM 尾部）
 # ============================================================
 @dataclass
 class NormalizerSettings:
-    similarity_threshold: float = 0.86
-    similarity_margin: float = 0.02
-    allow_refinement_split: bool = True
-    min_tail_instance_count: int = 1
-    max_new_predicates_per_category: int = 120
+    """归一化阈值；默认值集中在 ``recsub/config.py`` 的 ``normalize`` 段。"""
+
+    dedup_similarity_threshold: float
+    similarity_threshold: float
+    similarity_margin: float
+    allow_refinement_split: bool
+    max_new_predicates_per_category: int
 
 
 class PredicateNormalizer:
     """把一个 caption 的候选短语归一化成词表谓词。"""
 
-    def __init__(self, vocabulary: Vocabulary, encoder=None,
-                 settings: NormalizerSettings | None = None) -> None:
+    def __init__(self, vocabulary: Vocabulary, *,
+                 settings: NormalizerSettings, encoder=None) -> None:
         self.vocabulary = vocabulary
         self.encoder = encoder
-        self.settings = settings or NormalizerSettings()
-        self._vectors: dict[str, Vector] = {}
+        self.settings = settings
+        self._vocabulary_displays = {entry.display for entry in vocabulary.entries if entry.display}
+        self._vocabulary_vectors: dict[str, Vector] = {}
 
-    # ---- 向量 ----
-    def _vector(self, text: str) -> Vector | None:
+    def prepare_vocabulary_vectors(self) -> None:
+        """整张词表仅编码一次；相同写法跨类别共享向量。"""
+        if self.encoder is not None and self._vocabulary_displays:
+            self._vocabulary_vectors = self.encoder.encode(self._vocabulary_displays)
+            # 词表向量由归一化器单独持有，避免再在编码器缓存里保留一份副本。
+            if hasattr(self.encoder, "retain_cache"):
+                self.encoder.retain_cache(set())
+
+    def encode_image_phrases(self, phrases: Iterable[str], vectors: dict[str, Vector]) -> None:
+        """一张图的开放短语（含其他 caption）批量编码，跳过词表与已有向量。"""
+        if self.encoder is None:
+            return
+        missing = {phrase for phrase in phrases if phrase and phrase not in vectors
+                   and phrase not in self._vocabulary_vectors}
+        if missing:
+            vectors.update(self.encoder.encode(missing))
+
+    def release_image_vectors(self, vectors: dict[str, Vector]) -> None:
+        """图片结束时释放临时向量；词表向量不受影响。"""
+        vectors.clear()
+        if self.encoder is not None and hasattr(self.encoder, "retain_cache"):
+            self.encoder.retain_cache(set())
+
+    def duplicate_similarity(self, left: str, right: str,
+                             vectors: dict[str, Vector]) -> float | None:
+        """只用于同图跨 caption 提示；互斥或细化关系不算语义重复。"""
         if self.encoder is None:
             return None
-        cached = self._vectors.get(text)
-        if cached is None:
-            cached = self.encoder.encode([text])[text]
-            self._vectors[text] = cached
-        return cached
-
-    def _embedding_match(self, phrase: str, category: str) -> tuple[Predicate | None, str]:
-        """同类别词表里找最相似条目；返回 (条目, 说明)。"""
-        if self.encoder is None:
-            return None, "未启用向量匹配"
-        pool = [entry for entry in self.vocabulary.for_category(category)
-                if entry.display and entry.display != phrase]
-        if not pool:
-            return None, "该类别无可比对条目"
-        phrase_vector = self._vector(phrase)
-        scored = []
-        for entry in pool:
-            entry_vector = self._vector(entry.display)
-            if entry_vector is None:
-                continue
-            scored.append((cosine(phrase_vector, entry_vector), entry))
-        if not scored:
-            return None, "向量缺失"
-        scored.sort(key=lambda item: -item[0])
-        best_score, best = scored[0]
-
         from recsub.similarity import compatible, is_refinement
 
+        if (not compatible(left, right)[0] or is_refinement(left, right)
+                or is_refinement(right, left)):
+            return None
+        return cosine(self._vector(left, vectors), self._vector(right, vectors))
+
+    @property
+    def vocabulary_vector_count(self) -> int:
+        return len(self._vocabulary_vectors)
+
+    # ---- 向量 ----
+    def _vector(self, text: str, vectors: dict[str, Vector]) -> Vector | None:
+        if self.encoder is None:
+            return None
+        cached = vectors.get(text)
+        if cached is None:
+            cached = self._vocabulary_vectors.get(text)
+        if cached is None:
+            cached = self.encoder.encode([text])[text]
+            vectors[text] = cached
+        return cached
+
+    def deduplicate_evidence(
+            self, evidence: Sequence[PhraseEvidence],
+            vectors: dict[str, Vector] | None = None,
+    ) -> tuple[list[PhraseEvidence], list[dict[str, Any]]]:
+        """根内先去重开放短语，保留最短代表和支持实例的并集。"""
+        from recsub.similarity import compatible, is_refinement
+
+        if vectors is None:
+            vectors = {}
+        # 字符串去重：忽略大小写、空白及首尾标点。
+        exact_groups: dict[str, list[PhraseEvidence]] = defaultdict(list)
+        for item in evidence:
+            exact_groups[normalize_surface(item.phrase)].append(item)
+        ordered = sorted((_merge_phrase_evidence(group) for group in exact_groups.values()),
+                         key=lambda item: (len(item.phrase), normalize_surface(item.phrase), item.phrase))
+
+        if self.encoder is not None and len(ordered) > 1:
+            # 独立调用仍可根内批量编码；按图调用时命中传入的共享 vectors。
+            self.encode_image_phrases((item.phrase for item in ordered), vectors)
+
+        clusters: list[list[PhraseEvidence]] = []
+        methods: list[str] = []
+        for item in ordered:
+            placed = False
+            if self.encoder is not None:
+                for index, cluster in enumerate(clusters):
+                    # Complete-link：必须与簇内每条短语都兼容且相似，避免链式误合并。
+                    if all(
+                            compatible(item.phrase, member.phrase)[0]
+                            and not is_refinement(item.phrase, member.phrase)
+                            and not is_refinement(member.phrase, item.phrase)
+                            and cosine(self._vector(item.phrase, vectors),
+                                       self._vector(member.phrase, vectors))
+                            >= self.settings.dedup_similarity_threshold
+                            for member in cluster
+                    ):
+                        cluster.append(item)
+                        methods[index] = "embedding"
+                        placed = True
+                        break
+            if not placed:
+                clusters.append([item])
+                methods.append("exact" if len(item.raw_phrases) > 1 else "single")
+
+        deduplicated: list[PhraseEvidence] = []
+        audit: list[dict[str, Any]] = []
+        for cluster, method in zip(clusters, methods):
+            merged = _merge_phrase_evidence(cluster)
+            deduplicated.append(merged)
+            audit.append({"representative": merged.phrase,
+                          "raw_phrases": list(merged.raw_phrases),
+                          "merge_method": method,
+                          "instance_count": merged.instance_count})
+        deduplicated.sort(key=lambda item: (-item.instance_count, item.phrase))
+        return deduplicated, audit
+
+    def _embedding_match(self, phrase: str, category: str,
+                         vectors: dict[str, Vector] | None = None) -> tuple[Predicate | None, str]:
+        """先过滤互斥/细化项，再在兼容近邻中判断相似度与 margin。"""
+        if self.encoder is None:
+            return None, "未启用向量匹配"
+        if vectors is None:
+            vectors = {}
+        from recsub.similarity import compatible, is_refinement
+
+        pool = [entry for entry in self.vocabulary.entries
+                if entry.display
+                and compatible(phrase, entry.display,
+                               right_dimension=entry.dimension, right_verb=entry.verb)[0]
+                and (not self.settings.allow_refinement_split
+                     or not is_refinement(phrase, entry.display))]
+        if not pool:
+            return None, "无语义兼容的词表候选"
+        phrase_vector = self._vector(phrase, vectors)
+        # 跨类别且同槽位/同写法的条目只占一个相似度名次，否则两次
+        # 相同得分会让 margin 永远为零；不同维度的同写法仍保留歧义。
+        by_slot: dict[tuple[str, str, str, str | None, str], Predicate] = {}
+        for entry in pool:
+            key = (entry.display, entry.dimension, entry.value, entry.verb, entry.polarity)
+            previous = by_slot.get(key)
+            if previous is None or (
+                    entry.category != category, entry.predicate_id
+            ) < (
+                    previous.category != category, previous.predicate_id
+            ):
+                by_slot[key] = entry
+        scored = []
+        for entry in by_slot.values():
+            entry_vector = self._vector(entry.display, vectors)
+            if entry_vector is not None:
+                scored.append((cosine(phrase_vector, entry_vector), entry))
+        if not scored:
+            return None, "向量缺失"
+        scored.sort(key=lambda item: (-item[0], item[1].category != category,
+                                      item[1].predicate_id))
+        best_score, best = scored[0]
         if best_score < self.settings.similarity_threshold:
-            return None, f"最高相似度 {best_score:.3f} 低于阈值"
+            return None, f"最高兼容相似度 {best_score:.3f} 低于阈值"
         if len(scored) > 1 and best_score - scored[1][0] < self.settings.similarity_margin:
-            return None, (f"最高与次高仅差 {best_score - scored[1][0]:.3f}，"
+            return None, (f"最高与次高兼容词仅差 {best_score - scored[1][0]:.3f}，"
                           f"不足以确定（{best.value!r} / {scored[1][1].value!r}）")
-        allowed, facet = compatible(
-            phrase, best.display,
-            right_dimension=best.dimension, right_verb=best.verb,
-        )
-        if not allowed:
-            return None, f"互斥面 {facet} 不兼容"
-        if self.settings.allow_refinement_split and is_refinement(phrase, best.display):
-            return None, f"{phrase!r} 是 {best.display!r} 的细化，交给 LLM 尾部生成新谓词"
         return best, f"相似度 {best_score:.3f}"
 
     # ---- 主流程 ----
     def normalize_caption(self, image_name: str, caption: str, category: str,
-                          parent: Slot,
-                          evidence: Sequence[PhraseEvidence]) -> CaptionResult:
+                          parent: Slot, evidence: Sequence[PhraseEvidence],
+                          *, vectors: dict[str, Vector] | None = None) -> CaptionResult:
+        owns_vectors = vectors is None
+        if vectors is None:
+            vectors = {}
+        try:
+            return self._normalize_caption(image_name, caption, category, parent,
+                                           evidence, vectors)
+        finally:
+            if owns_vectors:
+                self.release_image_vectors(vectors)
+
+    def _normalize_caption(self, image_name: str, caption: str, category: str,
+                           parent: Slot, evidence: Sequence[PhraseEvidence],
+                           vectors: dict[str, Vector]) -> CaptionResult:
         result = CaptionResult(
             image_name=image_name, caption=caption, category=category,
             parent_predicate_id=parent.predicate_id, parent_display=parent.display,
         )
+        deduplicated, result.open_phrase_groups = self.deduplicate_evidence(evidence, vectors)
+        evidence = deduplicated
         # predicate_id → 聚合结果
         matched: dict[str, Candidate] = {}
         unresolved: list[PhraseEvidence] = []
@@ -309,8 +469,15 @@ class PredicateNormalizer:
             note = ""
             if predicate_id is not None:
                 entry = self.vocabulary.by_id(predicate_id)
+                if entry is not None and method == METHOD_VALUE:
+                    from recsub.similarity import compatible, is_refinement
+                    if (not compatible(item.phrase, entry.display,
+                                       right_dimension=entry.dimension, right_verb=entry.verb)[0]
+                            or is_refinement(item.phrase, entry.display)):
+                        entry = None
+                        note = "裸取值匹配存在语义歧义"
             else:
-                entry, note = self._embedding_match(item.phrase, category)
+                entry, note = self._embedding_match(item.phrase, category, vectors)
                 method = METHOD_EMBEDDING if entry is not None else None
 
             if entry is None:
@@ -333,12 +500,15 @@ class PredicateNormalizer:
                     dimension=entry.dimension,
                     value=entry.value, verb=entry.verb, polarity=entry.polarity,
                     source="reused", merge_method=method or METHOD_EXACT,
-                    raw_phrases=(item.phrase,), instance_count=item.instance_count,
-                    field=item.field,
+                    raw_phrases=item.raw_phrases or (item.phrase,),
+                    instance_count=item.instance_count,
+                    field=item.field, supporting_ids=set(item.instance_ids),
                 )
             else:
-                existing.raw_phrases = tuple(dict.fromkeys(existing.raw_phrases + (item.phrase,)))
-                existing.instance_count += item.instance_count
+                existing.raw_phrases = tuple(dict.fromkeys(
+                    existing.raw_phrases + (item.raw_phrases or (item.phrase,))
+                ))
+                _merge_candidate_support(existing, item)
                 # 保留最可信的合并方式。
                 if METHOD_ORDER.index(method or METHOD_EXACT) < METHOD_ORDER.index(existing.merge_method):
                     existing.merge_method = method or METHOD_EXACT
@@ -394,22 +564,48 @@ class PredicateNormalizer:
                     value=entry.value, verb=entry.verb, polarity=entry.polarity,
                     source="generated" if is_new else "reused",
                     merge_method=METHOD_LLM_NEW if is_new else METHOD_LLM_MATCH,
-                    raw_phrases=(item.phrase,), instance_count=item.instance_count,
-                    field=item.field,
+                    raw_phrases=item.raw_phrases or (item.phrase,),
+                    instance_count=item.instance_count,
+                    field=item.field, supporting_ids=set(item.instance_ids),
                 )
                 result.candidates.append(candidate)
                 by_id[predicate_id] = candidate
             else:
-                existing.raw_phrases = tuple(dict.fromkeys(existing.raw_phrases + (item.phrase,)))
-                existing.instance_count += item.instance_count
+                existing.raw_phrases = tuple(dict.fromkeys(
+                    existing.raw_phrases + (item.raw_phrases or (item.phrase,))
+                ))
+                _merge_candidate_support(existing, item)
         result.candidates.sort(key=lambda candidate: -candidate.instance_count)
         result.unresolved = []
 
 
+def _merge_phrase_evidence(items: Sequence[PhraseEvidence]) -> PhraseEvidence:
+    """以最短写法作为代表，同时合并字段、原短语和实例支持集合。"""
+    representative = min(items, key=lambda item: (
+        len(item.phrase), normalize_surface(item.phrase), item.phrase
+    ))
+    instance_ids = frozenset(instance_id for item in items for instance_id in item.instance_ids)
+    instance_count = (len(instance_ids) if any(item.instance_ids for item in items)
+                      else sum(item.instance_count for item in items))
+    fields = Counter(item.field for item in items)
+    raw_phrases = tuple(dict.fromkeys(
+        phrase for item in items for phrase in (item.raw_phrases or (item.phrase,))
+    ))
+    return PhraseEvidence(representative.phrase, fields.most_common(1)[0][0],
+                          instance_count, instance_ids, raw_phrases)
+
+
+def _merge_candidate_support(candidate: Candidate, item: PhraseEvidence) -> None:
+    if item.instance_ids:
+        candidate.supporting_ids.update(item.instance_ids)
+        candidate.instance_count = len(candidate.supporting_ids)
+    else:
+        candidate.instance_count += item.instance_count
+
+
 def _same_slot(left: Slot, right: Slot) -> bool:
-    """槽位等价判断；取值按去空白小写比较，容忍大小写与多余空格差异。"""
-    return (left.category == right.category
-            and left.dimension == right.dimension
+    """跨类别复用时也过滤与父根同维度/取值/动词/极性的候选。"""
+    return (left.dimension == right.dimension
             and left.polarity == right.polarity
             and (left.verb or "") == (right.verb or "")
             and normalize_surface(left.value) == normalize_surface(right.value))
@@ -419,7 +615,7 @@ def _same_slot(left: Slot, right: Slot) -> bool:
 # 三、尾部决策解析
 # ============================================================
 def build_vocabulary_lines(vocabulary: Vocabulary, category: str) -> list[str]:
-    """给 LLM 的词表清单：id → 写法 → 作用域。"""
+    """给 LLM 尾部的类别内清单：id → 写法 → 作用域。"""
     return [
         f"{entry.predicate_id} | {entry.display} | {entry.scope}"
         for entry in vocabulary.for_category(category)
@@ -455,8 +651,8 @@ def parse_tail_response(payload: Any, vocabulary: Vocabulary, category: str,
         match_id = row.get("match")
         if isinstance(match_id, str):
             entry = vocabulary.by_id(match_id.strip())
-            if entry is None:
-                warnings.append(f"{phrase!r} 匹配到不存在的谓词 {match_id!r}，转 unknown")
+            if entry is None or entry.category != category_key:
+                warnings.append(f"{phrase!r} 匹配到不存在或跨类别的谓词 {match_id!r}")
                 continue
             decisions[phrase] = {"kind": "match", "predicate_id": entry.predicate_id}
             continue
@@ -472,6 +668,9 @@ def parse_tail_response(payload: Any, vocabulary: Vocabulary, category: str,
                 continue
             if not value:
                 warnings.append(f"{phrase!r} 的新取值是空的，转 unknown")
+                continue
+            if classify_scope(value) == "scene_relative":
+                warnings.append(f"{phrase!r} 的新取值依赖单图布局，转 unresolved")
                 continue
             if polarity not in ("positive", "negative"):
                 polarity = "positive"
@@ -503,7 +702,93 @@ def parse_tail_response(payload: Any, vocabulary: Vocabulary, category: str,
 
 
 # ============================================================
-# 四、汇总
+# 四、根级判断候选预算
+# ============================================================
+def assemble_budgeted_candidates(result: CaptionResult, vocabulary: Vocabulary,
+                                 parent: Slot, budget: int) -> dict[str, Any]:
+    """按同类相似 → 跨类相似 → 同类未提及 → LLM 尾部挑选。"""
+    if budget < 0:
+        raise ValueError("每根候选预算不能为负")
+    original_ids = vocabulary.predicate_ids()
+    eligible = [
+        candidate for candidate in result.candidates
+        if not _same_slot(Slot(candidate.category, candidate.dimension, candidate.value,
+                               candidate.verb, candidate.polarity), parent)
+    ]
+    similar_same = sorted(
+        (candidate for candidate in eligible
+         if candidate.predicate_id in original_ids
+         and candidate.merge_method != METHOD_LLM_MATCH
+         and candidate.category == result.category),
+        key=lambda item: (-item.instance_count, item.predicate_id),
+    )
+    similar_cross = sorted(
+        (candidate for candidate in eligible
+         if candidate.predicate_id in original_ids
+         and candidate.merge_method != METHOD_LLM_MATCH
+         and candidate.category != result.category),
+        key=lambda item: (-item.instance_count, item.predicate_id),
+    )
+    tail = sorted(
+        (candidate for candidate in eligible
+         if candidate.merge_method in (METHOD_LLM_MATCH, METHOD_LLM_NEW)),
+        key=lambda item: (-item.instance_count, item.predicate_id),
+    )
+    already_mentioned = {candidate.predicate_id for candidate in eligible}
+    grouped = vocabulary.dimensions_of(result.category)
+    pools = {}
+    for dimension in sorted(grouped, key=lambda name: (-len(grouped[name]), name)):
+        pool = [entry for entry in grouped[dimension]
+                if entry.predicate_id not in already_mentioned
+                and entry.scope == "absolute" and entry.polarity == "positive"
+                and not _same_slot(entry.slot, parent)]
+        pool.sort(key=lambda entry: (-entry.root_count, -entry.instance_count,
+                                     entry.predicate_id))
+        if pool:
+            pools[dimension] = pool
+    unmentioned: list[Candidate] = []
+    for rank in range(max(map(len, pools.values()), default=0)):
+        for pool in pools.values():
+            if rank >= len(pool):
+                continue
+            entry = pool[rank]
+            unmentioned.append(Candidate(
+                predicate_id=entry.predicate_id, category=entry.category,
+                dimension=entry.dimension, value=entry.value, verb=entry.verb,
+                polarity=entry.polarity, source="reused", merge_method="unmentioned",
+                raw_phrases=(), instance_count=0, field="",
+            ))
+
+    tiers = (("same_category_similar", similar_same),
+             ("cross_category_similar", similar_cross),
+             ("same_category_dissimilar", unmentioned),
+             ("llm_tail", tail))
+    selected: list[Candidate] = []
+    seen: set[str] = set()
+    audit = {"candidate_budget": budget, "tier_counts": {}, "budget_dropped": []}
+    for tier, candidates in tiers:
+        selected_count = 0
+        for candidate in candidates:
+            if candidate.predicate_id in seen:
+                continue
+            seen.add(candidate.predicate_id)
+            if len(selected) < budget:
+                candidate.selection_tier = tier
+                candidate.selection_rank = len(selected) + 1
+                selected.append(candidate)
+                selected_count += 1
+            else:
+                audit["budget_dropped"].append({
+                    "predicate_id": candidate.predicate_id,
+                    "tier": tier, "reason": "over_budget",
+                })
+        audit["tier_counts"][tier] = {"eligible": len(candidates), "selected": selected_count}
+    result.candidates = selected
+    return audit
+
+
+# ============================================================
+# 五、汇总
 # ============================================================
 def summarize(results: Iterable[CaptionResult]) -> dict[str, Any]:
     """统计合并方式与丢弃理由，用于人工确认归一化是否按预期工作。"""
