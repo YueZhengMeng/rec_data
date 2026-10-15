@@ -1,11 +1,10 @@
-"""step7：本地交互式人工审核工具。
+"""step8：本地交互式人工审核工具。
 
-step6 只输出通过自动门禁的候选，且每个节点带 ``review.status=pending``。本脚本
-把每个待审「根 × 谓词」变成一条审核条目，在本地浏览器展示：
+step7 已先为每个正向子集生成独立可视化图。本脚本把每个待审「根 × 谓词」
+变成一条审核条目，在浏览器中复用同一套单子集渲染器展示：
 
-- 原图；
-- yes（绿）、no（红）、unknown（灰）点；
-- 支持数、补集数、unknown 比例、平衡度、门禁数值；
+- 与 step7 相同的原图、右侧 category/caption/新增划分属性和点标记；
+- 审核模式下额外显示 no/unknown 点；
 - keep / discard / 改词 / 全标 unknown 的键盘操作。
 
 使用标准库 ``http.server``，不引入新依赖，也只绑定 127.0.0.1。四个人并行审核
@@ -13,12 +12,10 @@ step6 只输出通过自动门禁的候选，且每个节点带 ``review.status=
 下标分片。``--ingest`` 合并并计算 pairwise Cohen's kappa，再把 keep 条目导出成
 ``fine_grained_subsets_final.jsonl``。
 
-    # 先从 step6 节点生成审核条目并导出 CSV
-    python step7_review_sheet.py --build
-    # 浏览器审核
-    python step7_review_sheet.py --serve --reviewer r1 --shard 0:3249
-    # 多人结束后合并
-    python step7_review_sheet.py --ingest review/decisions_r1.jsonl review/decisions_r2.jsonl
+    # 先可视化，再生成审核条目并启动浏览器
+    python step7_visualize.py
+    python step8_review_sheet.py --build
+    python step8_review_sheet.py --serve --reviewer r1 --shard 0:3249
 """
 
 from __future__ import annotations
@@ -27,7 +24,6 @@ import argparse
 import csv
 import http.server
 import json
-import mimetypes
 import re
 import socketserver
 import sys
@@ -40,6 +36,7 @@ from typing import Any, Mapping, Sequence
 from recsub.config import CONFIG, path, resolve_dir
 from recsub.console import configure_console
 from recsub.io import append_jsonl, iter_jsonl, write_jsonl_atomic
+from recsub.subset_visualization import load_subset_nodes, render_subset_png
 
 
 # --------------------------------------------------------------------------
@@ -57,23 +54,14 @@ def parse_shard(value: str | None, total: int) -> tuple[int, int]:
     return start, end
 
 
-def load_instance_points(instance_path: Path) -> dict[int, dict]:
-    return {int(row["instance_id"]): dict(row) for row in iter_jsonl(instance_path)}
+def build_review_items(subsets_path: Path, instances_path: Path | None = None) -> list[dict]:
+    """Build one review item per positive step6 subset.
 
-
-def build_review_items(subsets_path: Path, instances_path: Path) -> list[dict]:
-    """只为正谓词节点建审核条目，complement 随正谓词一并确定，不重复审核。"""
-    points = load_instance_points(instances_path)
+    Coordinates are resolved from the step6 caption roots by the shared loader;
+    ``instances_path`` remains an accepted compatibility argument for old callers.
+    """
     items = []
-    for node in iter_jsonl(subsets_path):
-        if node.get("node_type") != "predicate_subset":
-            continue
-        predicate = node.get("predicate") or {}
-        if predicate.get("polarity") == "negative" or node.get("complement_of"):
-            continue
-        yes_ids = [int(value) for value in node.get("instance_ids", ())]
-        no_ids = [int(value) for value in node.get("negative_instance_ids", ())]
-        unknown_ids = [int(value) for value in node.get("unknown_instance_ids", ())]
+    for node in load_subset_nodes(subsets_path, positive_only=True):
         item = {
             "review_id": node["node_id"],
             "node_id": node["node_id"],
@@ -81,19 +69,21 @@ def build_review_items(subsets_path: Path, instances_path: Path) -> list[dict]:
             "image_name": node["image_name"],
             "caption": node["caption"],
             "category": node["category"],
-            "predicate": predicate,
+            "predicate": node.get("predicate") or {},
             "counts": node.get("counts") or {},
             "gates": node.get("gates") or {},
-            "yes_ids": yes_ids,
-            "no_ids": no_ids,
-            "unknown_ids": unknown_ids,
-            "yes_points": [points[i]["point"] for i in yes_ids if i in points],
-            "no_points": [points[i]["point"] for i in no_ids if i in points],
-            "unknown_points": [points[i]["point"] for i in unknown_ids if i in points],
+            "yes_ids": [int(value) for value in node.get("instance_ids", ())],
+            "no_ids": [int(value) for value in node.get("negative_instance_ids", ())],
+            "unknown_ids": [int(value) for value in node.get("unknown_instance_ids", ())],
+            "yes_points": node.get("yes_points", []),
+            "no_points": node.get("no_points", []),
+            "unknown_points": node.get("unknown_points", []),
             "decision": {"status": "pending"},
         }
         items.append(item)
     items.sort(key=lambda item: (item["image_name"], item["caption"], item["review_id"]))
+    for index, item in enumerate(items, start=1):
+        item["subset_index"] = index
     return items
 
 
@@ -232,15 +222,14 @@ body{font:14px system-ui,sans-serif;margin:0;background:#f6f6f2;color:#171717}
 header{position:sticky;top:0;background:#fff;padding:10px 18px;border-bottom:1px solid #ddd;z-index:2}
 #layout{display:grid;grid-template-columns:minmax(520px,1fr) 390px;gap:18px;padding:18px}
 #stage{background:#fff;border:1px solid #ddd;padding:10px;position:relative}
-#canvas{max-width:100%;height:auto;display:block}.legend span{margin-right:12px}
-.yes{color:#087f5b}.no{color:#c92a2a}.unknown{color:#777}
+#preview{max-width:100%;height:auto;display:block}.yes{color:#087f5b}.no{color:#c92a2a}.unknown{color:#777}
 button{font-size:16px;padding:9px 15px;margin:3px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer}
 button:hover{background:#eef}.keep{border-color:#087f5b}.discard{border-color:#c92a2a}
 pre{white-space:pre-wrap;word-break:break-word;background:#f0f0ec;padding:8px}.small{color:#666;font-size:12px}
 </style>
-<header><b>REC-8K 子集审核</b> <span id="progress"></span> <span id="reviewer"></span></header>
-<div id="layout"><div id="stage"><canvas id="canvas"></canvas><div class="legend"><span class="yes">● yes</span><span class="no">● no</span><span class="unknown">● unknown</span></div></div>
-<aside><h2 id="title"></h2><pre id="meta"></pre><div>
+<header><b>REC-8K 子集审核（step8）</b> <span id="progress"></span> <span id="reviewer"></span></header>
+<div id="layout"><div id="stage"><img id="preview" alt="subset preview"></div>
+<aside><h2 id="title">审核控制</h2><pre id="meta"></pre><div>
 <button class="keep" onclick="decide('keep')">K Keep</button><button class="discard" onclick="decide('discard')">D Discard</button>
 <button onclick="decide('unknown')">U All unknown</button><button onclick="editLabel()">M Edit label</button>
 <button onclick="previous()">B Previous</button><button onclick="next()">Space Next</button></div>
@@ -249,11 +238,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:#f0f0ec;padding:8px}.s
 <script>
 const reviewer=new URLSearchParams(location.search).get('reviewer')||'r1';
 let items=[],decisions={},index=0;
-const c=document.querySelector('#canvas'),ctx=c.getContext('2d');
+const preview=document.querySelector('#preview');
 async function load(){let x=await fetch('/api/items');items=await x.json();let d=await fetch('/api/decisions?reviewer='+encodeURIComponent(reviewer));decisions=await d.json();render()}
 function current(){return items[index]}
-function render(){let x=current();if(!x)return;document.querySelector('#progress').textContent=`${index+1}/${items.length}`;document.querySelector('#reviewer').textContent=`reviewer=${reviewer}`;document.querySelector('#title').textContent=`${x.caption} · ${x.predicate.display}`;let n=x.counts;document.querySelector('#meta').textContent=JSON.stringify({image:x.image_name,category:x.category,predicate:x.predicate,counts:n,gates:x.gates,decision:decisions[x.review_id]||{status:'pending'}},null,2);let img=new Image();img.onload=()=>{let scale=Math.min(1,900/img.width);c.width=img.width*scale;c.height=img.height*scale;ctx.drawImage(img,0,0,c.width,c.height);dots(x.yes_points,'#087f5b',scale);dots(x.no_points,'#c92a2a',scale);dots(x.unknown_points,'#777',scale)};img.src='/image/'+encodeURIComponent(x.image_name);document.querySelector('#status').textContent=decisions[x.review_id]?`已保存：${decisions[x.review_id].status}`:'待审核'}
-function dots(points,color,s){ctx.fillStyle=color;for(let p of points){ctx.beginPath();ctx.arc(p[0]*s,p[1]*s,Math.max(5,4/s),0,Math.PI*2);ctx.fill();ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke()}}
+function render(){let x=current();if(!x)return;document.querySelector('#progress').textContent=`${index+1}/${items.length}`;document.querySelector('#reviewer').textContent=`reviewer=${reviewer}`;let n=x.counts;document.querySelector('#meta').textContent=JSON.stringify({review_id:x.review_id,category:x.category,caption:x.caption,predicate:x.predicate,counts:n,gates:x.gates,decision:decisions[x.review_id]||{status:'pending'}},null,2);preview.alt=`${x.category} · ${x.caption} · ${x.predicate.display}`;preview.src='/preview/'+encodeURIComponent(x.review_id)+'?mode=review&v='+Date.now();document.querySelector('#status').textContent=decisions[x.review_id]?`已保存：${decisions[x.review_id].status}`:'待审核'}
 async function decide(status){let x=current(),note='';if(status==='unknown')note='人工审核：三值标签全部改为 unknown';let r=await fetch('/api/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:x.review_id,status,reviewer,note})});if(!r.ok){alert(await r.text());return}decisions[x.review_id]={status,reviewer,note};render();if(status!=='unknown')next()}
 function editLabel(){let x=current(),value=prompt('输入新的谓词写法（只改审核显示；原始 predicate_id 不自动改）：',x.predicate.display);if(value&&value!==x.predicate.display){fetch('/api/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:x.review_id,status:'keep',reviewer,note:'改词：'+value,display_override:value})}).then(()=>{decisions[x.review_id]={status:'keep',reviewer,note:'改词：'+value};render();next()})}}
 function next(){if(index<items.length-1){index++;render()}}function previous(){if(index>0){index--;render()}}
@@ -303,16 +291,24 @@ class ReviewHandler(http.server.BaseHTTPRequestHandler):
             self.send_bytes(json.dumps(result, ensure_ascii=False).encode(),
                             "application/json; charset=utf-8")
             return
-        if parsed.path.startswith("/image/"):
-            relative = urllib.parse.unquote(parsed.path[len("/image/"):])
-            # 防目录穿越：只允许图片目录下的 basename / 相对名。
+        if parsed.path.startswith("/preview/"):
+            review_id = urllib.parse.unquote(parsed.path[len("/preview/"):])
+            item = self.state["items_by_id"].get(review_id)
+            if item is None:
+                self.send_bytes(b"preview not found", "text/plain", 404)
+                return
             image_dir = Path(self.state["image_dir"]).resolve()
-            target = (image_dir / Path(relative).name).resolve()
+            target = (image_dir / Path(item["image_name"]).name).resolve()
             if image_dir not in target.parents or not target.is_file():
                 self.send_bytes(b"image not found", "text/plain", 404)
                 return
-            content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-            self.send_bytes(target.read_bytes(), content_type)
+            payload = render_subset_png(
+                target, item, subset_index=int(item.get("subset_index", 1)), mode="review",
+                max_width=CONFIG["visualize"]["max_width"],
+                max_height=CONFIG["visualize"]["max_height"],
+                sidebar_width=CONFIG["visualize"]["sidebar_width"],
+            )
+            self.send_bytes(payload, "image/png")
             return
         self.send_bytes(b"not found", "text/plain", 404)
 
@@ -354,6 +350,7 @@ def serve(items: Sequence[dict], review_dir: Path, image_dir: Path, reviewer: st
     decision_paths = {reviewer: review_dir / f"decisions_{reviewer}.jsonl"}
     state = {
         "items": selected, "item_ids": {item["review_id"] for item in selected},
+        "items_by_id": {item["review_id"]: item for item in selected},
         "review_dir": review_dir, "image_dir": image_dir,
         "decision_paths": decision_paths, "lock": threading.Lock(),
     }
@@ -378,9 +375,10 @@ def serve(items: Sequence[dict], review_dir: Path, image_dir: Path, reviewer: st
 # CLI
 # --------------------------------------------------------------------------
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="REC-8K 子集人工审核工具")
+    parser = argparse.ArgumentParser(description="REC-8K step8 子集人工审核工具")
     parser.add_argument("--subsets", type=Path, default=path("subsets"))
-    parser.add_argument("--instances", type=Path, default=path("instance_data"))
+    parser.add_argument("--instances", type=Path, default=path("instance_data"),
+                        help="兼容旧调用；坐标现在直接从 step6 caption_root 读取")
     parser.add_argument("--review-dir", type=Path, default=resolve_dir(CONFIG["paths"]["review_dir"]))
     parser.add_argument("--build", action="store_true", help="生成 review_items.jsonl + review_sheet.csv")
     parser.add_argument("--serve", action="store_true", help="启动本地浏览器审核服务")
@@ -404,9 +402,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     items_path = args.items or args.review_dir / "review_items.jsonl"
     try:
         if args.build:
-            for name in ("subsets", "instances"):
-                if not getattr(args, name).is_file():
-                    raise FileNotFoundError(f"找不到 {name}：{getattr(args, name)}")
+            if not args.subsets.is_file():
+                raise FileNotFoundError(f"找不到 subsets：{args.subsets}")
             items = build_review_items(args.subsets, args.instances)
             items_path, csv_path = write_review_artifacts(items, args.review_dir)
             print(f"✅ 审核条目 {len(items)} 条 → {items_path}")

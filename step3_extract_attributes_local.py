@@ -103,6 +103,10 @@ def append_batch(output: Path, records: list[dict]) -> None:
 def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -> int:
     if accelerator is None:
         accelerator = create_accelerator()
+    if not args.check_fingerprint:
+        accelerator.print(
+            "警告：已关闭运行指纹校验（--no-check-fingerprint），续跑结果不会校验配置一致性。"
+        )
     validate_runtime(accelerator, args.batch_size)
     if extractor_factory is None:
         from recsub.llm_local import LocalAttributesExtractor
@@ -110,7 +114,12 @@ def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -
 
     fingerprint = fingerprint_for(args, accelerator.num_processes)
     # 只有写文件的主进程认领输出路径，避免各 rank 争用同一个标记文件。
-    completed = completed_ids(args.output, fingerprint, claim=accelerator.is_main_process)
+    completed = completed_ids(
+        args.output,
+        fingerprint,
+        claim=accelerator.is_main_process,
+        check_fingerprint=args.check_fingerprint,
+    )
     image_names = ({name.strip() for name in args.image_names.split(",") if name.strip()}
                    if args.image_names else None)
     selected, stats = select_work(
@@ -175,6 +184,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--instances", type=Path, default=path("instance_data"))
     parser.add_argument("--image-dir", default=CONFIG["image_dir"])
     parser.add_argument("--output", type=Path, default=path("extract_result_local"))
+    parser.add_argument("--check-fingerprint", action=argparse.BooleanOptionalAction,
+                        default=CONFIG["resume"]["check_fingerprint"],
+                        help="校验输出旁挂的运行指纹；关闭后不会读取既有标记")
     parser.add_argument("--sample-output", type=Path, default=path("extract_sample_local"))
     parser.add_argument("--prompt-preview", type=Path, default=path("extract_preview_local"))
     parser.add_argument("--image-names", default=None)

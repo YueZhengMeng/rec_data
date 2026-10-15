@@ -92,12 +92,18 @@ async def judge_one(online: OnlineModel, cropper, item: Mapping[str, Any],
 
 
 async def run(args: argparse.Namespace) -> int:
+    if not args.check_fingerprint:
+        print(
+            "警告：已关闭运行指纹校验（--no-check-fingerprint），续跑结果不会校验配置一致性。"
+        )
     by_root, phrases_by_root, ids_by_display = load_caption_predicates(args.candidates)
     with_predicates = sum(1 for phrases in phrases_by_root.values() if phrases)
     print(f"✅ 候选根 {len(by_root)} 个，其中 {with_predicates} 个有候选谓词")
 
     fingerprint = judgment_fingerprint(args)
-    completed, prior_rows = completed_judgments(args.output, fingerprint)
+    completed, prior_rows = completed_judgments(
+        args.output, fingerprint, check_fingerprint=args.check_fingerprint,
+    )
     if prior_rows and args.probe_per_caption > 0:
         raise ValueError("探针模式在部分写入后不能安全重算剪枝；请指定新的 --output")
     if completed:
@@ -228,6 +234,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--image-dir", default=CONFIG["image_dir"],
                         help="原图目录")
     parser.add_argument("--output", type=Path, default=path("predicate_labels"))
+    parser.add_argument("--check-fingerprint", action=argparse.BooleanOptionalAction,
+                        default=CONFIG["resume"]["check_fingerprint"],
+                        help="校验输出旁挂的运行指纹；关闭后不会读取既有标记")
     parser.add_argument("--constant-output", type=Path, default=path("predicate_constant"),
                         help="探针剪掉的「根×恒定条件」记录")
     parser.add_argument("--image-names", default=None)

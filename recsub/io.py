@@ -343,6 +343,33 @@ def write_run_fingerprint(output: str | Path, fingerprint: str) -> Path:
     })
 
 
+def check_or_claim_run_fingerprint(
+    output: str | Path,
+    fingerprint: str,
+    *,
+    has_records: bool,
+    check_fingerprint: bool = True,
+    claim: bool = True,
+    mismatch_message: str,
+) -> None:
+    """校验已有结果的标记，或在空输出上按需认领路径。
+
+    关闭校验时完全不读取标记；仅当输出为空且标记不存在时才允许新建标记，
+    从而保留已有标记的原始字节，也不把已有的无标记结果错误地认领。
+    """
+    if has_records:
+        if check_fingerprint and read_run_fingerprint(output) != fingerprint:
+            raise ValueError(mismatch_message)
+        return
+
+    if claim:
+        marker = run_marker_path(output)
+        # 默认严格模式保留原有空输出认领行为：可覆盖旧/损坏标记。
+        # 绕过模式不能改动已经存在的标记，哪怕输出目前为空。
+        if check_fingerprint or not marker.exists():
+            write_run_fingerprint(output, fingerprint)
+
+
 # --------------------------------------------------------------------------
 # 迁移
 # --------------------------------------------------------------------------

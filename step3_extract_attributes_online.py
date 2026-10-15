@@ -60,10 +60,14 @@ async def extract_one(online: OnlineModel, cropper, instance: Mapping[str, Any],
 
 
 async def run(args: argparse.Namespace) -> int:
+    if not args.check_fingerprint:
+        print(
+            "警告：已关闭运行指纹校验（--no-check-fingerprint），续跑结果不会校验配置一致性。"
+        )
     image_names = ({name.strip() for name in args.image_names.split(",") if name.strip()}
                    if args.image_names else None)
     fingerprint = fingerprint_for(args)
-    completed = completed_ids(args.output, fingerprint)
+    completed = completed_ids(args.output, fingerprint, check_fingerprint=args.check_fingerprint)
     if completed:
         print(f"跳过 {len(completed)} 个已完成实例")
 
@@ -140,6 +144,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--instances", type=Path, default=path("instance_data"))
     parser.add_argument("--image-dir", default=CONFIG["image_dir"])
     parser.add_argument("--output", type=Path, default=path("extract_result_online"))
+    parser.add_argument("--check-fingerprint", action=argparse.BooleanOptionalAction,
+                        default=CONFIG["resume"]["check_fingerprint"],
+                        help="校验输出旁挂的运行指纹；关闭后不会读取既有标记")
     parser.add_argument("--sample-output", type=Path, default=path("extract_sample_online"))
     parser.add_argument("--prompt-preview", type=Path, default=path("extract_preview_online"))
     parser.add_argument("--image-names", default=None)

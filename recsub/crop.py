@@ -68,6 +68,10 @@ class CropConfig:
     fine_output_size: int | None = 512
     context_output_size: int | None = 512
 
+    # Full 与下游 DETR RandomResize([800], max_size=1333) 使用相同尺度，允许放大。
+    full_short_side: int = 800
+    full_max_size: int = 1333
+
     # ---- 标记 ----
     marker_style: MarkerStyle = "outline"
     marker_color: tuple[int, int, int, int] = (255, 32, 32, 235)
@@ -115,6 +119,10 @@ class CropConfig:
             size = getattr(self, name)
             if size is not None and size < 1:
                 raise ValueError(f"{name} must be None or a positive integer")
+        for name in ("full_short_side", "full_max_size"):
+            size = getattr(self, name)
+            if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+                raise ValueError(f"{name} must be a positive integer")
         if self.marker_style not in MARKER_STYLES:
             raise ValueError(f"marker_style must be one of {MARKER_STYLES}")
         for prefix in ("marker", "outline"):
@@ -187,6 +195,8 @@ class CropMetadata:
     fine_box: CropBox
     context_box: CropBox
     context_marker_point: tuple[int, int]
+    full_marker_point: tuple[int, int]
+    full_output_size: tuple[int, int]
     fine_output_size: tuple[int, int]
     context_output_size: tuple[int, int]
     marker_style: str
@@ -387,14 +397,16 @@ class AdaptiveCropper:
         marker_point = _point_in_output(clamped_point, context_box, context_image.size)
         # marker 只画在 Full 和 Context 上；Fine 保持干净，供模型观察细节。
         context_image = _draw_target_marker(context_image, marker_point, self.config)
-        # Full 使用原图坐标直接标记；_draw_target_marker 通过 overlay 不会修改输入 image。
-        full_point = (
-            _clamp_int(_round_half_up(clamped_point[0]), 0, width - 1),
-            _clamp_int(_round_half_up(clamped_point[1]), 0, height - 1),
+        # Full 单独缩放；Fine/Context 仍由原图裁剪。缩放后再映射点、绘制 marker。
+        full_image = _resize_full_output(
+            image, self.config.full_short_side, self.config.full_max_size,
         )
-        # Full 与 Context 使用同一套样式，仅按各自图像尺寸选择 marker 大小。
+        full_point = _point_in_output(
+            clamped_point, CropBox(0, 0, width, height), full_image.size,
+        )
+        # Full 与 Context 使用同一套样式，仅按各自输出尺寸选择 marker 大小。
         full_image = _draw_target_marker(
-            image,
+            full_image,
             full_point,
             self.config,
             radius_ratio=self.config.full_marker_radius_ratio,
@@ -418,6 +430,8 @@ class AdaptiveCropper:
             fine_box=fine_box,
             context_box=context_box,
             context_marker_point=marker_point,
+            full_marker_point=full_point,
+            full_output_size=full_image.size,
             fine_output_size=fine_image.size,
             context_output_size=context_image.size,
             marker_style=self.config.marker_style,
@@ -484,6 +498,28 @@ def _square_box(point: Point, side: int, width: int, height: int) -> CropBox:
     left = _clamp_int(left, 0, width - side)
     top = _clamp_int(top, 0, height - side)
     return CropBox(left, top, left + side, top + side)
+
+
+def _resize_full_output(image: Image.Image, short_side: int, max_size: int) -> Image.Image:
+    """复现 DETR 单尺度 RandomResize 的整数尺寸规则（PIL 宽、高顺序）。"""
+    width, height = image.size
+    min_original_size = min(width, height)
+    max_original_size = max(width, height)
+    size = short_side
+    if max_original_size / min_original_size * size > max_size:
+        size = int(round(max_size * min_original_size / max_original_size))
+    if size < 1:
+        raise ValueError(
+            f"image aspect ratio {width}x{height} produces a zero short side "
+            f"with full_max_size={max_size}"
+        )
+    if min_original_size == size:
+        return image
+    if width < height:
+        output_size = (size, int(size * height / width))
+    else:
+        output_size = (int(size * width / height), size)
+    return image.resize(output_size, Image.Resampling.BILINEAR)
 
 
 def _resize_output(image: Image.Image, output_size: int | None) -> Image.Image:

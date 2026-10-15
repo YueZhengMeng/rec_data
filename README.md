@@ -29,8 +29,8 @@ step4_normalize_predicates.py       归一化及四类预算 → predicate_candi
 step5_judge_predicates_online.py    每实例 yes/no/unknown（在线）→ predicate_labels.jsonl
 step5_judge_predicates_local.py     同一 prompt 的本地 Qwen 版本 → predicate_labels_local.jsonl
 step6_build_subsets.py              门禁 + 三值分区 → fine_grained_subsets.jsonl
-step7_review_sheet.py               本地浏览器审核 → decisions / final 子集
-step8_visualize.py                  step6 子集逐面板标记实例
+step7_visualize.py                 step6 正向子集可视化（每图一个子集）
+step8_review_sheet.py               本地浏览器审核 → decisions / final 子集
 ```
 
 共享实现位于 `recsub/`；除了 `step*.py`，根目录没有其他可运行入口。
@@ -147,20 +147,42 @@ PowerShell 请使用 `$env:CUDA_VISIBLE_DEVICES="0,1,2,3"` 后再运行
 `accelerate launch ...`；原生命令行的 `CUDA_VISIBLE_DEVICES=... command` 是 Bash
 语法。若要比较不同进程数的确定性输出，使用 `--no-do-sample`；采样模式默认开启，
 改变 rank 数会改变随机数流，不保证逐 token 一致。两个本地入口的续跑指纹都绑定
-进程数及每卡 batch；改变后请指定新的 `--output`。四卡 CUDA 集合通信推荐在
+进程数及每卡 batch；改变后建议指定新的 `--output`，以免混用结果。CUDA 集合通信推荐在
 Linux/WSL2 环境运行，不能仅通过修改 PowerShell 语法就保证原生 Windows 多卡可用。
 
 两端从 `recsub/prompts.py` 使用同一份提取文本与类别引导，提取 prompt **不包含
-词表**；密度索引一律用完整实例表，裁剪配置也一律取 `CONFIG["crop"]`（局部视图
-512px、outline 标记）。各阶段 online/local 的文本、裁剪配置及
-Global→Context→Fine→文本顺序相同，但在线传 JPEG base64、本地传 PIL/processor
-输入，图像编码不是逐字节相同。
+词表**；密度索引一律用完整实例表，裁剪配置也一律取 `CONFIG["crop"]`。step3 与 step5 的
+online/local 四个入口共用同一 cropper：Global 使用与下游
+`T.RandomResize([800], max_size=1333)` 相同的等比例缩放及整数尺寸规则，允许放大
+（例如 384×384 → 800×800、2000×1000 → 1332×666）；配置为 `full_short_side=800`、
+`full_max_size=1333`。遵循 DETR 的整数舍入顺序，极长图的长边可能略超 1333
+（例如 1000×5000 → 267×1335），不是另外强制截断。只缩放 Global，不改写源图片；Context/Fine 仍从原图裁剪并各输出
+512×512。Global/Context 在各自输出尺寸上绘制 outline 标记，点和裁剪框仍以原图坐标保存。
+各阶段 online/local 的文本、裁剪配置及 Global→Context→Fine→文本顺序相同，但在线传
+JPEG base64、本地传 PIL/processor 输入，图像编码不是逐字节相同；本地 processor 还可能
+进行 patch 尺寸对齐，因此不保证最终模型 tensor 与下游任务完全相同。
 
 默认分别写 `anno/extract_result_online.jsonl` 与 `anno/extract_result_local.jsonl`。
 成功记录带 `instance_id/image_name/caption/category/attributes`，失败记录带
 `failed: true` 和原因且不会被计为已完成。运行指纹是整次运行的常量，不逐行重复，
-而是旁挂一份 `anno/extract_result_*.jsonl.run.json`；新入口拒绝与当前模型、配置、
-prompt、裁剪或实例表指纹不一致的续跑文件，切换条件时使用新的 `--output`。
+而是旁挂一份 `anno/extract_result_*.jsonl.run.json`。step3/step5 在线和本地入口的续跑策略统一由
+`CONFIG["resume"]["check_fingerprint"]` 控制，默认 **False**：打印警告后继续，允许当前模型、
+prompt、裁剪、候选或实例表等配置与历史结果不同。成功 ID 仍跳过、失败 ID 仍重试。
+
+- `--check-fingerprint`：显式启用严格检查，已有非空结果的指纹不同或标记缺失即拒绝续跑。
+- `--no-check-fingerprint`：显式跳过指纹检查（也是当前默认行为），但**不跳过**结果 JSONL 格式、
+  现有记录结构或抽样清单校验；step5 探针模式也仍不能对部分结果续跑。
+- 跳过时不改写已有 `.run.json`（包括损坏标记），非空结果缺标记时也不补写。标记不代表
+  混合结果中的每条记录都来自同一配置；需要配置可追溯的实验应启用检查并使用新的 `--output`。
+- 此次 Global 缩放改变输入及指纹；继续旧结果不会重算已成功的实例，文件可能包含新旧尺度的结果。
+
+八卡 Bash/Linux 续跑示例（保留已有模型路径和生成参数，按需补充）：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --multi_gpu --num_processes 8 \
+  step3_extract_attributes_local.py --sample-per-category 0 --no-check-fingerprint
+```
+
 本地 step3 **和** step5 都默认保存四项指标，不需要开启逐 token 明细：
 
 ```json
@@ -207,6 +229,18 @@ python step4_normalize_predicates.py --input anno/extract_result_imported_local.
 python step4_normalize_predicates.py                 # 默认无 LLM tail
 python step4_normalize_predicates.py --llm-tail      # 启用 LLM 尾部来生成新谓词
 ```
+
+多卡可用独立并行入口按完整图片分片（关闭 LLM tail）：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 python step4_normalize_predicates_parallel.py \
+  --gpus 0,1,2,3 --input anno/extract_result_local.jsonl --no-llm-tail
+```
+
+每张卡启动一个 step4 进程，候选结果与生成词表在所有 worker 成功后合并；失败时会保留
+临时分片和日志。默认成功后删除临时文件，可传 `--keep-temp` 保留。该入口当前不支持
+`--llm-tail`，因为 tail 批次和类别级生成上限会因分片而变化。Windows PowerShell 可先设置
+`$env:CUDA_VISIBLE_DEVICES="0,1,2,3"` 再运行 Python 命令。
 
 step4 先按根对开放短语做字符串与向量去重，再在 **整张人工审核词表**里匹配；
 词表不同写法只预编码一次并缓存在归一化器中；同图所有 caption 的开放短语
@@ -334,44 +368,45 @@ python step6_build_subsets.py --max-depth 2
 `subset_decisions_log.jsonl` 记录每条未通过提案及门禁实际数值。不要把兄弟子集当成
 互斥类别；只有 yes/no/unknown 三者合计覆盖父集时才可做互补一致性检查。
 
-### 7. 浏览器人工审核
+### 7. 子集可视化
 
 ```bash
-# 从 step6 输出构建审核条目与 CSV
-python step7_review_sheet.py --build
+# 每张 PNG 只展示一个正向子集；互补子集不生成图片
+python step7_visualize.py --image-names 0001-fsc147-1306.jpg
+```
 
-# 本地服务（只绑定 127.0.0.1）
-python step7_review_sheet.py --serve --reviewer r1
+直接读取 step6 的 `fine_grained_subsets.jsonl`（无需 step1 实例表）。原始类别、原始
+caption、新增用于划分子集的属性都显示在图片右侧；图片标题只保留流程和子集编号。
+默认输出到 `show_subsets/positive/`，文件名包含 step6 的稳定 `node_id`。缺图默认跳过。
+
+### 8. 浏览器人工审核
+
+```bash
+# 先完成 step7 可视化，再从 step6 输出构建审核条目与 CSV
+python step8_review_sheet.py --build
+
+# 本地服务（只绑定 127.0.0.1；审核预览复用 step7 渲染器）
+python step8_review_sheet.py --serve --reviewer r1
 
 # 四人分片示例，START:END 是左闭右开
-python step7_review_sheet.py --serve --reviewer r1 --shard 0:3249
-python step7_review_sheet.py --serve --reviewer r2 --shard 3249:6498
+python step8_review_sheet.py --serve --reviewer r1 --shard 0:3249
+python step8_review_sheet.py --serve --reviewer r2 --shard 3249:6498
 ```
 
 浏览器里用 `K` keep、`D` discard、`U` 全标 unknown、`M` 改显示词、空格下一条、
 `B` 上一条。每次决策立即追加到 `review/decisions_<reviewer>.jsonl`，中断可续审。
+审核预览与 step7 使用同一单子集布局；审核模式额外显示 no/unknown 点。
 
 多人结束后：
 
 ```bash
-python step7_review_sheet.py --ingest \
+python step8_review_sheet.py --ingest \
   review/decisions_r1.jsonl review/decisions_r2.jsonl \
   --final-output anno/fine_grained_subsets_final.jsonl
 ```
 
 冲突投票不会静默按 discard 处理，会标为 `disagreement`，并输出 pairwise Cohen's
 kappa。只有所有有记录的评审都 `keep` 才进入最终文件。
-
-### 8. 可视化
-
-```bash
-python step8_visualize.py --image-names 0001-fsc147-1306.jpg
-```
-
-直接读取 step6 的 `fine_grained_subsets.jsonl`（无需 step1 实例表）。每张 PNG
-只展示一个正向子集，只用绿点标记该节点 `instance_ids` 中的实例；不生成互补子集的
-图片，也不绘制 no/unknown。默认输出到 `show_subsets/positive/`；文件名包含 step6
-的稳定 `node_id`，同名图片或截断 caption 也不会互相覆盖。缺图默认跳过。
 
 ## 重要边界
 

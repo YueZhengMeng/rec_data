@@ -13,7 +13,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
-from recsub.io import iter_jsonl, read_run_fingerprint, write_json_atomic, write_run_fingerprint
+from recsub.io import (
+    check_or_claim_run_fingerprint, iter_jsonl, write_json_atomic,
+)
 from recsub.utils import match_json
 
 ALLOWED_FIELDS = ("appearance", "action", "location", "relation")
@@ -58,11 +60,13 @@ def extraction_record(instance: Mapping[str, Any], *, attributes: dict | None = 
     return record
 
 
-def completed_ids(output: Path, fingerprint: str, *, claim: bool = True) -> set[int]:
-    """读已完成实例并校验运行指纹；指纹不符即拒绝续跑。
+def completed_ids(output: Path, fingerprint: str, *, claim: bool = True,
+                  check_fingerprint: bool = True) -> set[int]:
+    """读已完成实例并按需校验运行指纹。
 
-    ``claim=True`` 时，输出文件还没有记录就用当前指纹认领这条路径（写入旁挂
-    标记）——多进程运行时只让写文件的进程认领，避免并发争用同一个标记文件。
+    ``check_fingerprint=False`` 只绕过旁挂标记的校验，不放宽 JSONL 记录校验；
+    空输出仅在没有既有标记时才会被认领。``claim=True`` 时，严格模式下的空输出
+    认领行为与默认续跑流程相同。
     """
     completed: set[int] = set()
     written = 0
@@ -75,12 +79,14 @@ def completed_ids(output: Path, fingerprint: str, *, claim: bool = True) -> set[
                 raise ValueError(f"{output} 含不兼容的记录，请指定新的 --output")
             if not record.get("failed") and isinstance(record.get("attributes"), Mapping):
                 completed.add(record["instance_id"])
-    if not written:
-        if claim:
-            write_run_fingerprint(output, fingerprint)
-        return completed
-    if read_run_fingerprint(output) != fingerprint:
-        raise ValueError(f"{output} 属于其他提取配置；请指定新的 --output")
+    check_or_claim_run_fingerprint(
+        output,
+        fingerprint,
+        has_records=bool(written),
+        check_fingerprint=check_fingerprint,
+        claim=claim,
+        mismatch_message=f"{output} 属于其他提取配置；请指定新的 --output",
+    )
     return completed
 
 

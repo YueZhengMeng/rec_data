@@ -8,19 +8,25 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from recsub.io import iter_jsonl, read_run_fingerprint, write_run_fingerprint
+from recsub.io import check_or_claim_run_fingerprint, iter_jsonl
 from recsub.normalize import flatten_candidates
 from recsub.utils import match_json
 
 LABELS = ("yes", "no", "unknown")
 
 
-def completed_judgments(output: Path, fingerprint: str) -> tuple[set[int], int]:
-    """读已完成实例并校验运行指纹；指纹不符即拒绝续跑。
+def completed_judgments(
+    output: Path,
+    fingerprint: str,
+    *,
+    claim: bool = True,
+    check_fingerprint: bool = True,
+) -> tuple[set[int], int]:
+    """读已完成实例并按需校验运行指纹。
 
-    结果文件为空或不存在时，把这条输出路径认领给当前配置（写入旁挂标记）；
-    已有记录却没有标记、或标记与当前配置不符，都说明结果不是这一套候选与
-    判断参数产出的，直接报错要求换 ``--output``，避免静默混用。
+    结果文件为空或不存在时，默认把输出路径认领给当前配置（写入旁挂标记）；
+    已有记录的实例 ID 只排除成功记录，失败记录仍会在重跑时尝试。关闭指纹校验
+    时仍验证所有 JSONL 记录，且不读取或改动已经存在的标记。
     """
     output = Path(output)
     completed: set[int] = set()
@@ -30,11 +36,14 @@ def completed_judgments(output: Path, fingerprint: str) -> tuple[set[int], int]:
             written += 1
             if not record.get("judgment_failed"):
                 completed.add(int(record["instance_id"]))
-    if not written:
-        write_run_fingerprint(output, fingerprint)
-        return completed, written
-    if read_run_fingerprint(output) != fingerprint:
-        raise ValueError(f"{output} 属于其他候选或判断配置；请指定新的 --output")
+    check_or_claim_run_fingerprint(
+        output,
+        fingerprint,
+        has_records=bool(written),
+        check_fingerprint=check_fingerprint,
+        claim=claim,
+        mismatch_message=f"{output} 属于其他候选或判断配置；请指定新的 --output",
+    )
     return completed, written
 
 

@@ -157,6 +157,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--candidates", type=Path, default=path("predicate_candidates"))
     parser.add_argument("--image-dir", default=CONFIG["image_dir"])
     parser.add_argument("--output", type=Path, default=path("predicate_labels_local"))
+    parser.add_argument("--check-fingerprint", action=argparse.BooleanOptionalAction,
+                        default=CONFIG["resume"]["check_fingerprint"],
+                        help="校验输出旁挂的运行指纹；关闭后不会读取既有标记")
     parser.add_argument("--constant-output", type=Path,
                         default=path("predicate_constant_local"),
                         help="探针剪掉的「根×恒定条件」记录")
@@ -201,6 +204,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -> int:
     if accelerator is None:
         accelerator = create_accelerator()
+    if not args.check_fingerprint:
+        accelerator.print(
+            "警告：已关闭运行指纹校验（--no-check-fingerprint），续跑结果不会校验配置一致性。"
+        )
     validate_runtime(accelerator, args.batch_size)
     if extractor_factory is None:
         from recsub.llm_local import LocalAttributesExtractor
@@ -208,7 +215,12 @@ def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -
 
     by_root, phrases_by_root, ids_by_display = load_caption_predicates(args.candidates)
     fingerprint = judgment_fingerprint(args, accelerator.num_processes)
-    completed, prior_rows = completed_judgments(args.output, fingerprint)
+    completed, prior_rows = completed_judgments(
+        args.output,
+        fingerprint,
+        claim=accelerator.is_main_process,
+        check_fingerprint=args.check_fingerprint,
+    )
     if prior_rows and args.probe_per_caption > 0:
         raise ValueError("探针模式在部分写入后不能安全重算剪枝；请指定新的 --output")
 

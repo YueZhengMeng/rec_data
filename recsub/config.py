@@ -79,11 +79,11 @@ CONFIG: dict[str, Any] = {
         # step6 产出：门禁筛选后的子集
         "subsets": "anno/fine_grained_subsets.jsonl",
         "subset_decisions": "anno/subset_decisions_log.jsonl",
-        # step7 产出：人工审核与最终子集
+        # step7 产出：子集可视化
+        "output_dir": "show_subsets",
+        # step8 产出：人工审核与最终子集
         "review_dir": "review",
         "subsets_final": "anno/fine_grained_subsets_final.jsonl",
-        # step8 产出：可视化
-        "output_dir": "show_subsets",
     },
 
     # ---- 在线调用 ----
@@ -108,6 +108,12 @@ CONFIG: dict[str, Any] = {
         "max_preview": 100,
     },
 
+    # ---- step3 / step5 续跑策略（不影响模型输入，不纳入运行指纹）----
+    "resume": {
+        # 默认警告后继续；用 --check-fingerprint 可显式恢复严格的配置一致性检查。
+        "check_fingerprint": False,
+    },
+
     # ---- 裁剪三视图 ----
     "crop": {
         "neighbor_k": 5,
@@ -122,6 +128,10 @@ CONFIG: dict[str, Any] = {
         # 512 更省，适合先用小模型试跑；768 细节更多。
         "fine_output_size": 512,
         "context_output_size": 512,
+        # Global 等比例缩放，对齐下游 RandomResize([800], max_size=1333)，小图也放大。
+        # 局部裁剪仍基于原图，不损失 Fine/Context 的原始细节。
+        "full_short_side": 800,
+        "full_max_size": 1333,
         # outline：更小的环、更细的描边、更窄的高光、更短的引线，尽量少覆盖判定要看
         # 的像素（标注只给一个点，无法沿物体描边，能做的只是少遮挡）。
         # ring 是另一套标记样式：更大的环、更宽的白色高光、更长的引线。
