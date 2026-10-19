@@ -1,8 +1,8 @@
 """step4：把开放提取的候选短语归一化到词表槽位。
 
-1. **开放短语先根内去重，再匹配整张人工审核词表**。每根先做字符串/
-   embedding 去重；整个词表预编码一次，词表向量跨根保留，开放短语向量
-   每根结束后释放。命中词表的候选按“同类相似 / 跨类相似”标记。
+1. **开放短语先根内去重，再匹配根所属划分的人工审核词表**。每根先做字符串/
+   embedding 去重；train 使用训练词表，val/test 使用全量词表，各自预编码并跨根保留，开放短语
+   向量每图结束后释放。命中词表的候选按“同类相似 / 跨类相似”标记。
 2. **父属性冗余由代码硬过滤**，不问 LLM：跨类复用时也排除与父属性
    同维度、取值、动词和极性的词表谓词。
 3. **候选预算分四层**：同类相似、跨类相似、同类不相似、LLM 尾部；LLM 尾部
@@ -29,7 +29,7 @@ from recsub.config import CONFIG, path
 from recsub.console import configure_console
 from recsub.embedding import Qwen3EmbeddingEncoder
 from recsub.instances import enrich_with_instances, load_parents
-from recsub.io import iter_jsonl, write_json_atomic
+from recsub.io import iter_jsonl, load_json_any, write_json_atomic
 from recsub.llm_api import OnlineModel
 from recsub.normalize import (
     CANDIDATE_TIERS,
@@ -51,7 +51,7 @@ from recsub.normalize import (
 from recsub.prompts import build_normalize_tail_messages
 from recsub.similarity import compatible
 from recsub.utils import extract_and_parse_json
-from recsub.vocabulary import Vocabulary, normalize_surface
+from recsub.vocabulary import Vocabulary, load_split_keys, normalize_surface
 
 
 def check_cross_caption_duplicates(image_name: str, results: Sequence[CaptionResult],
@@ -140,12 +140,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="开放提取结果（本地入口用 --input anno/extract_result_local.jsonl）")
     parser.add_argument("--instances", type=Path, default=path("instance_data"),
                         help="实例表，用于取父 caption 的类别与原属性")
-    parser.add_argument("--vocabulary", type=Path, default=path("vocabulary"),
-                        help="谓词词表（step2 产出）")
-    parser.add_argument("--output", type=Path, default=path("predicate_candidates"),
+    parser.add_argument("--vocabulary", type=Path, default=path("vocabulary_train"),
+                        help="训练集谓词词表（step2 --split train 产出）")
+    parser.add_argument("--vocabulary-all", type=Path, default=path("vocabulary_all"),
+                        help="val/test 共用的全量谓词词表（step2 --split all 产出）")
+    parser.add_argument("--splits", type=Path, default=path("splits"),
+                        help="数据划分 splits.json，按 (图片名, caption) 路由词表")
+    parser.add_argument("--output", type=Path, default=path("predicate_candidates_online"),
                         help="归一化候选输出（图片 → caption → 候选谓词）")
     parser.add_argument("--generated-vocabulary", type=Path,
-                        default=path("generated_vocabulary"),
+                        default=path("generated_vocabulary_online"),
                         help="LLM 尾部新生成的谓词，单独存一份用于消融")
     parser.add_argument("--image-names", default=None,
                         help="只处理这些图片（逗号分隔）")
@@ -183,6 +187,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         default=CONFIG["normalize"]["llm_tail_concurrency"],
                         help="尾部请求的并发数")
     return parser.parse_args(argv)
+
+
+def load_vocabulary_scopes(splits_path: Path) -> dict[tuple[str, str], str]:
+    """将 splits.json 的根映射到词表作用域；val/test 共用 all。"""
+    splits = load_json_any(splits_path)
+    if not isinstance(splits, Mapping):
+        raise ValueError(f"{splits_path} 顶层必须是划分对象")
+    scopes: dict[tuple[str, str], str] = {}
+    for split, scope in (("train", "train"), ("val", "all"), ("test", "all")):
+        keys = load_split_keys(splits, split)
+        assert keys is not None
+        for key in keys:
+            previous = scopes.get(key)
+            if previous is not None:
+                raise ValueError(f"根 {key!r} 在多个数据划分中重复")
+            scopes[key] = scope
+    return scopes
 
 
 def build_settings(args: argparse.Namespace) -> NormalizerSettings:
@@ -250,9 +271,16 @@ async def resolve_tails(online: OnlineModel, vocabulary: Vocabulary,
 
 
 async def run(args: argparse.Namespace) -> int:
-    vocabulary = Vocabulary.load(args.vocabulary)
+    split_scope_by_key = load_vocabulary_scopes(args.splits)
+    vocabularies = {
+        "train": Vocabulary.load(args.vocabulary),
+        "all": Vocabulary.load(args.vocabulary_all),
+    }
     settings = build_settings(args)
-    print(f"✅ 词表 {len(vocabulary)} 条；开放去重阈值 {settings.dedup_similarity_threshold}，"
+    for scope, vocabulary in vocabularies.items():
+        print(f"✅ {scope} 词表 {len(vocabulary)} 条："
+              f"{args.vocabulary if scope == 'train' else args.vocabulary_all}")
+    print(f"✅ 开放去重阈值 {settings.dedup_similarity_threshold}，"
           f"闭集匹配阈值 {settings.similarity_threshold}，margin {settings.similarity_margin}，"
           f"细化不合并 {settings.allow_refinement_split}")
 
@@ -261,20 +289,6 @@ async def run(args: argparse.Namespace) -> int:
     if args.image_names:
         image_names = {name.strip() for name in args.image_names.split(",") if name.strip()}
     print(f"✅ 父 caption 索引：{len(parents)} 个根")
-
-    encoder = None
-    if args.embedding:
-        encoder = Qwen3EmbeddingEncoder(
-            CONFIG["normalize"]["embedding_model"],
-            batch_size=CONFIG["normalize"]["embedding_batch_size"],
-            device=CONFIG["normalize"]["embedding_device"],
-        )
-        print(f"✅ 向量模型：{CONFIG['normalize']['embedding_model']}")
-
-    normalizer = PredicateNormalizer(vocabulary, encoder=encoder, settings=settings)
-    if encoder is not None:
-        normalizer.prepare_vocabulary_vectors()
-        print(f"✅ 全词表预编码 {normalizer.vocabulary_vector_count} 个不同写法")
 
     # 只带 instance_id 的提取记录靠与实例表归并配对补上图片信息。
     enriched = enrich_with_instances(iter_jsonl(args.input), args.instances)
@@ -291,16 +305,38 @@ async def run(args: argparse.Namespace) -> int:
         if parent_info is None:
             skipped += 1
             continue
+        if key not in split_scope_by_key:
+            raise ValueError(f"提取结果中的根不在 splits.json：{key!r}")
         if category != parent_info[0]:
             raise ValueError(f"提取结果与父根的类别不一致：{key} ({category} / {parent_info[0]})")
         merge_evidence(accumulators.setdefault(key, {}), collect_evidence(group))
 
+    encoder = None
+    if args.embedding:
+        encoder = Qwen3EmbeddingEncoder(
+            CONFIG["normalize"]["embedding_model"],
+            batch_size=CONFIG["normalize"]["embedding_batch_size"],
+            device=CONFIG["normalize"]["embedding_device"],
+        )
+        print(f"✅ 向量模型：{CONFIG['normalize']['embedding_model']}")
+
+    normalizers = {
+        scope: PredicateNormalizer(vocabulary, encoder=encoder, settings=settings)
+        for scope, vocabulary in vocabularies.items()
+    }
+    if encoder is not None:
+        for scope, normalizer in normalizers.items():
+            normalizer.prepare_vocabulary_vectors()
+            print(f"✅ {scope} 词表预编码 {normalizer.vocabulary_vector_count} 个不同写法")
+
     keys_by_image: dict[str, list[tuple[str, str]]] = {}
     for key in sorted(accumulators):
         keys_by_image.setdefault(key[0], []).append(key)
+    train_root_count = sum(split_scope_by_key[key] == "train" for key in accumulators)
+    all_root_count = len(accumulators) - train_root_count
     results: list[CaptionResult] = []
     payload: dict[str, dict[str, Any]] = {}
-    unresolved_count = 0
+    unresolved_by_scope = {"train": 0, "all": 0}
     for image_name, image_keys in tqdm(keys_by_image.items(), total=len(keys_by_image),
                                        desc="处理图片"):
         evidence_by_key = {key: accumulator_to_evidence(accumulators.pop(key))
@@ -311,69 +347,96 @@ async def run(args: argparse.Namespace) -> int:
             phrases_by_caption[key[1]] = ({parents[key][1]} if parents[key][1] else set()) | {
                 item.phrase for item in evidence
             }
-        vectors: dict = {}
+        vectors_by_scope: dict[str, dict] = {"train": {}, "all": {}}
         try:
-            # 同图开放短语和跨 caption 比对所需的原标注属性一次批量编码。
-            phrases = {item.phrase for evidence in evidence_by_key.values() for item in evidence}
-            if len(evidence_by_key) > 1:
-                phrases.update(parents[key][1] for key in evidence_by_key)
-            normalizer.encode_image_phrases(phrases, vectors)
+            # 同一图片内按词表作用域分别缓存短语向量，避免跨作用域词表匹配。
+            for key, evidence in evidence_by_key.items():
+                scope = split_scope_by_key[key]
+                phrases = {item.phrase for item in evidence}
+                if len(evidence_by_key) > 1:
+                    phrases.update(parents[other_key][1] for other_key in image_keys)
+                normalizers[scope].encode_image_phrases(phrases, vectors_by_scope[scope])
             image_results: list[CaptionResult] = []
             for key in sorted(evidence_by_key):
+                scope = split_scope_by_key[key]
+                vocabulary = vocabularies[scope]
+                normalizer = normalizers[scope]
                 parent_category, parent_attribute, parent_type = parents[key]
                 parent = vocabulary.parent_slot(parent_category, parent_type, parent_attribute)
                 result = normalizer.normalize_caption(
-                    key[0], key[1], parent_category, parent, evidence_by_key[key], vectors=vectors
+                    key[0], key[1], parent_category, parent, evidence_by_key[key],
+                    vectors=vectors_by_scope[scope]
                 )
                 if args.llm_tail:
                     results.append(result)
                 else:
-                    unresolved_count += len(result.unresolved)
+                    unresolved_by_scope[scope] += len(result.unresolved)
                 image_results.append(result)
             if not args.llm_tail:
                 for result in image_results:
+                    scope = split_scope_by_key[(result.image_name, result.caption)]
+                    vocabulary = vocabularies[scope]
                     parent_info = parents[(result.image_name, result.caption)]
                     parent = vocabulary.parent_slot(parent_info[0], parent_info[2], parent_info[1])
                     assemble_budgeted_candidates(result, vocabulary, parent,
                                                  args.max_candidates_per_root)
-                check_cross_caption_duplicates(image_name, image_results, phrases_by_caption,
-                                               normalizer, vectors,
-                                               args.cross_caption_duplicate_threshold)
+                for result in image_results:
+                    scope = split_scope_by_key[(result.image_name, result.caption)]
+                    check_cross_caption_duplicates(
+                        image_name, [result], phrases_by_caption, normalizers[scope],
+                        vectors_by_scope[scope], args.cross_caption_duplicate_threshold
+                    )
                 for result in image_results:
                     payload.setdefault(image_name, {})[result.caption] = compact_root(result)
         finally:
-            normalizer.release_image_vectors(vectors)
+            for scope, vectors in vectors_by_scope.items():
+                normalizers[scope].release_image_vectors(vectors)
     if skipped:
         print(f"⚠️ 跳过 {skipped} 个在实例表里找不到父 caption 的组")
 
     processed_count = sum(len(captions) for captions in payload.values()) if not args.llm_tail else len(results)
     print(f"✅ 已归一化 {processed_count} 个 caption（规则级"
-          f"{' + 向量级' if encoder else ''}）")
+          f"{' + 向量级' if encoder else ''}）；train 根 {train_root_count}，"
+          f"val/test 根 {all_root_count}")
     if encoder is not None:
-        print(f"   常驻词表向量 {normalizer.vocabulary_vector_count} 条；开放短语临时向量已释放")
+        print("   常驻词表向量 " + "; ".join(
+            f"{scope} {normalizer.vocabulary_vector_count} 条"
+            for scope, normalizer in normalizers.items()
+        ) + "；开放短语临时向量已释放")
 
     # ---- LLM 尾部 ----
     new_entries: list = []
     warnings: list[str] = []
     use_tail = args.llm_tail
-    grouped = group_unresolved(results) if use_tail else {}
-    unresolved_total = sum(len(items) for items in grouped.values()) if use_tail else unresolved_count
-    if unresolved_total and use_tail:
-        print(f"⏳ 未解析短语 {unresolved_total} 个，交给 LLM 尾部")
-        online = OnlineModel.create(concurrency=args.concurrency)
-        decisions, new_entries, warnings = await resolve_tails(
-            online, vocabulary, settings, args.tail_batch_size, grouped
-        )
-        for result in results:
-            parent_info = parents[(result.image_name, result.caption)]
-            parent = vocabulary.parent_slot(parent_info[0], parent_info[2], parent_info[1])
-            normalizer.apply_tail(
-                result, parent, decisions,
-                {entry.predicate_id: entry for entry in new_entries},
+    for scope in ("train", "all"):
+        scoped_results = [result for result in results
+                          if split_scope_by_key[(result.image_name, result.caption)] == scope]
+        grouped = group_unresolved(scoped_results) if use_tail else {}
+        scoped_unresolved = sum(len(items) for items in grouped.values()) if use_tail else unresolved_by_scope[scope]
+        if scoped_unresolved and use_tail:
+            print(f"⏳ {scope} 未解析短语 {scoped_unresolved} 个，交给 LLM 尾部")
+            online = OnlineModel.create(concurrency=args.concurrency)
+            decisions, scoped_new, scoped_warnings = await resolve_tails(
+                online, vocabularies[scope], settings, args.tail_batch_size, grouped
             )
-        print(f"✅ 尾部：{len(decisions)} 个短语有决策，新增谓词 {len(new_entries)} 个")
-    elif unresolved_total:
-        print(f"⚠️ 未解析短语 {unresolved_total} 个（默认关闭 LLM 尾部；需要时传 --llm-tail）")
+            warnings.extend(scoped_warnings)
+            for entry in scoped_new:
+                previous = {item.predicate_id: item for item in new_entries}.get(entry.predicate_id)
+                if previous is not None and previous.slot.key() != entry.slot.key():
+                    raise ValueError(f"train/all 生成词表的谓词 ID 冲突：{entry.predicate_id}")
+                if previous is None:
+                    new_entries.append(entry)
+            scoped_new_by_id = {entry.predicate_id: entry for entry in scoped_new}
+            for result in scoped_results:
+                parent_info = parents[(result.image_name, result.caption)]
+                parent = vocabularies[scope].parent_slot(parent_info[0], parent_info[2], parent_info[1])
+                normalizers[scope].apply_tail(
+                    result, parent, decisions,
+                    scoped_new_by_id,
+                )
+            print(f"✅ {scope} 尾部：{len(decisions)} 个短语有决策，新增谓词 {len(scoped_new)} 个")
+        elif scoped_unresolved:
+            print(f"⚠️ {scope} 未解析短语 {scoped_unresolved} 个（默认关闭 LLM 尾部；需要时传 --llm-tail）")
 
     if use_tail:
         # LLM 尾部决策完成后才知道最终候选；按图片重建临时向量用于提示。
@@ -387,22 +450,28 @@ async def run(args: argparse.Namespace) -> int:
                 phrases_by_caption[result.caption] = ({parent_attribute} if parent_attribute else set()) | {
                     phrase for group in result.open_phrase_groups for phrase in group["raw_phrases"]
                 }
-            vectors: dict = {}
+            vectors_by_scope: dict[str, dict] = {"train": {}, "all": {}}
             try:
-                normalizer.encode_image_phrases(
-                    (phrase for phrases in phrases_by_caption.values() for phrase in phrases),
-                    vectors,
-                )
                 for result in same_image:
+                    scope = split_scope_by_key[(result.image_name, result.caption)]
+                    normalizers[scope].encode_image_phrases(
+                        (phrase for phrases in phrases_by_caption.values() for phrase in phrases),
+                        vectors_by_scope[scope],
+                    )
+                    vocabulary = vocabularies[scope]
                     parent_info = parents[(image_name, result.caption)]
                     parent = vocabulary.parent_slot(parent_info[0], parent_info[2], parent_info[1])
                     assemble_budgeted_candidates(result, vocabulary, parent,
                                                  args.max_candidates_per_root)
-                check_cross_caption_duplicates(image_name, same_image, phrases_by_caption,
-                                               normalizer, vectors,
-                                               args.cross_caption_duplicate_threshold)
+                for result in same_image:
+                    scope = split_scope_by_key[(result.image_name, result.caption)]
+                    check_cross_caption_duplicates(
+                        image_name, [result], phrases_by_caption, normalizers[scope],
+                        vectors_by_scope[scope], args.cross_caption_duplicate_threshold
+                    )
             finally:
-                normalizer.release_image_vectors(vectors)
+                for scope, vectors in vectors_by_scope.items():
+                    normalizers[scope].release_image_vectors(vectors)
 
     # ---- 紧凑输出 ----
     selected_new_ids: set[str] = set()
@@ -416,7 +485,9 @@ async def run(args: argparse.Namespace) -> int:
     selected_new = [entry for entry in new_entries if entry.predicate_id in selected_new_ids]
     Vocabulary(entries=selected_new, metadata={
         "origin": "generated-by-step4-tail", "source_extract": str(args.input),
-        "parent_vocabulary": str(args.vocabulary), "count": len(selected_new),
+        "parent_vocabulary": {scope: str(args.vocabulary if scope == "train" else args.vocabulary_all)
+                              for scope in ("train", "all")},
+        "splits": str(args.splits), "count": len(selected_new),
     }).save(args.generated_vocabulary)
     print(f"✅ 入选生成谓词 {len(selected_new)} 个 → {args.generated_vocabulary}")
 
@@ -437,7 +508,7 @@ async def run(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     configure_console()
     args = parse_args(argv)
-    for name in ("input", "instances", "vocabulary"):
+    for name in ("input", "instances", "vocabulary", "vocabulary_all", "splits"):
         if not getattr(args, name).is_file():
             print(f"❌ 找不到 {name}：{getattr(args, name)}", file=sys.stderr)
             return 1
@@ -447,6 +518,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if len({args.input.resolve(), args.output.resolve(),
             args.generated_vocabulary.resolve()}) != 3:
         print("❌ 输入、候选输出与生成词表路径必须不同", file=sys.stderr)
+        return 1
+    if {args.output.resolve(), args.generated_vocabulary.resolve()} & {
+        args.vocabulary.resolve(), args.vocabulary_all.resolve(), args.splits.resolve(),
+        args.instances.resolve()}:
+        print("❌ 输出路径不能覆盖划分、实例表或原始词表", file=sys.stderr)
         return 1
     try:
         return asyncio.run(run(args))

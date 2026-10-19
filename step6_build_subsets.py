@@ -108,9 +108,9 @@ def parent_redundant_ids(predicates: Sequence[Mapping[str, Any]], parent: Mappin
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="门禁筛选三值分区子集")
-    parser.add_argument("--labels", type=Path, default=path("predicate_labels"),
+    parser.add_argument("--labels", type=Path, default=path("predicate_labels_online"),
                         help="step5 三值判断 JSONL")
-    parser.add_argument("--candidates", type=Path, default=path("predicate_candidates"),
+    parser.add_argument("--candidates", type=Path, default=path("predicate_candidates_online"),
                         help="step4 归一化候选 JSON")
     parser.add_argument("--instances", type=Path, default=path("instance_data"))
     parser.add_argument("--output", type=Path, default=path("subsets"),

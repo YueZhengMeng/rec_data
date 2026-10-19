@@ -17,7 +17,7 @@ from typing import Any, Mapping, Sequence
 
 from openai import AsyncOpenAI
 
-from recsub.config import CONFIG, crop_config
+from recsub.config import CONFIG, crop_config, online_sampling
 from recsub.crop import AdaptiveCropper, CropConfig, CropMetadata
 from recsub.utils import encode_image
 
@@ -45,6 +45,8 @@ class OnlineModel:
     semaphore: asyncio.Semaphore
     max_retries: int
     enable_thinking: bool
+    provider: str = "qwen"
+    presence_penalty: float | None = None
 
     @classmethod
     def create(
@@ -53,11 +55,16 @@ class OnlineModel:
             concurrency: int | None = None,
             max_retries: int | None = None,
             enable_thinking: bool | None = None,
+            presence_penalty: float | None = None,
     ) -> "OnlineModel":
         settings = CONFIG["online"]
+        provider = str(CONFIG.get("provider", "qwen")).lower()
         api_key = CONFIG.get("api_key")
         if not api_key:
-            raise RuntimeError("未设置 DASHSCOPE_API_KEY，无法调用在线模型")
+            key_env = "DEEPSEEK_API_KEY" if provider == "deepseek" else "DASHSCOPE_API_KEY"
+            raise RuntimeError(
+                f"未设置 {key_env}（或 REC_API_KEY），无法调用 {provider} 在线模型"
+            )
         client = AsyncOpenAI(
             api_key=api_key,
             base_url=CONFIG["base_url"],
@@ -69,7 +76,28 @@ class OnlineModel:
             max_retries=max_retries if max_retries is not None else settings["max_retries"],
             enable_thinking=(settings["enable_thinking"]
                              if enable_thinking is None else enable_thinking),
+            provider=provider,
+            presence_penalty=presence_penalty,
         )
+
+    def _extra_body(self) -> dict[str, Any]:
+        """Return the thinking field expected by the selected OpenAI-compatible API."""
+        if self.provider == "deepseek":
+            return {"thinking": {
+                "type": "enabled" if self.enable_thinking else "disabled",
+            }}
+        return {"enable_thinking": self.enable_thinking}
+
+    def _request_options(self) -> dict[str, Any]:
+        """标准采样参数直接传给 SDK；Qwen 扩展参数与思考开关放入 extra_body。"""
+        options = online_sampling(
+            self.provider, self.enable_thinking, presence_penalty=self.presence_penalty,
+        )
+        extra_body = self._extra_body()
+        for key in ("top_k", "repetition_penalty"):
+            if key in options:
+                extra_body[key] = options.pop(key)
+        return {**options, "extra_body": extra_body}
 
     async def complete(self, messages: Sequence[Mapping[str, Any]], *,
                        stream: bool = False) -> Completion | None:
@@ -102,7 +130,8 @@ class OnlineModel:
                 completion = await self.client.chat.completions.create(
                     model=self.model_name,
                     messages=list(messages),
-                    extra_body={"enable_thinking": self.enable_thinking},
+                    **self._request_options(),
+                    stream_options={"include_usage": True},
                     stream=True,
                 )
                 content = ""
@@ -125,10 +154,12 @@ class OnlineModel:
             completion = await self.client.chat.completions.create(
                 model=self.model_name,
                 messages=list(messages),
-                extra_body={"enable_thinking": self.enable_thinking},
+                **self._request_options(),
             )
             message = completion.choices[0].message
-            reasoning = (getattr(message, "model_extra", {}) or {}).get("reasoning_content") or ""
+            extras = getattr(message, "model_extra", {}) or {}
+            reasoning = (getattr(message, "reasoning_content", None)
+                         or extras.get("reasoning_content") or "")
             usage = getattr(completion, "usage", None)
             return (message.content or "", reasoning,
                     getattr(usage, "prompt_tokens", None),

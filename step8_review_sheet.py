@@ -4,7 +4,7 @@ step7 已先为每个正向子集生成独立可视化图。本脚本把每个�
 变成一条审核条目，在浏览器中复用同一套单子集渲染器展示：
 
 - 与 step7 相同的原图、右侧 category/caption/新增划分属性和点标记；
-- 审核模式下额外显示 no/unknown 点；
+- 红叉标记当前子集正样本，绿点标记同根 caption 其余实例；不更改三值标签；
 - keep / discard / 改词 / 全标 unknown 的键盘操作。
 
 使用标准库 ``http.server``，不引入新依赖，也只绑定 127.0.0.1。四个人并行审核
@@ -78,6 +78,8 @@ def build_review_items(subsets_path: Path, instances_path: Path | None = None) -
             "yes_points": node.get("yes_points", []),
             "no_points": node.get("no_points", []),
             "unknown_points": node.get("unknown_points", []),
+            "other_instance_ids": node["other_instance_ids"],
+            "other_points": node["other_points"],
             "decision": {"status": "pending"},
         }
         items.append(item)

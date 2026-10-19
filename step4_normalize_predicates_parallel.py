@@ -28,7 +28,6 @@ from recsub.instances import enrich_with_instances
 from recsub.io import iter_jsonl, write_json_atomic
 from recsub.vocabulary import Predicate, Vocabulary
 
-
 _STEP4 = Path(__file__).with_name("step4_normalize_predicates.py")
 
 
@@ -48,11 +47,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--gpus", type=parse_gpus, required=True,
                         help="GPU 编号，逗号分隔，例如 0,1,2,3")
-    parser.add_argument("--input", type=Path, default=path("extract_result_online"))
+    parser.add_argument("--input", type=Path, default=path("extract_result_local"))
     parser.add_argument("--instances", type=Path, default=path("instance_data"))
-    parser.add_argument("--vocabulary", type=Path, default=path("vocabulary"))
-    parser.add_argument("--output", type=Path, default=path("predicate_candidates"))
-    parser.add_argument("--generated-vocabulary", type=Path, default=path("generated_vocabulary"))
+    parser.add_argument("--vocabulary", type=Path, default=path("vocabulary_train"))
+    parser.add_argument("--vocabulary-all", type=Path, default=path("vocabulary_all"))
+    parser.add_argument("--splits", type=Path, default=path("splits"))
+    parser.add_argument("--output", type=Path, default=path("predicate_candidates_local"))
+    parser.add_argument("--generated-vocabulary", type=Path, default=path("generated_vocabulary_local"))
     parser.add_argument("--max-candidates-per-root", type=int,
                         default=normalize["max_candidates_per_root"])
     parser.add_argument("--embedding", action=argparse.BooleanOptionalAction,
@@ -129,6 +130,7 @@ def worker_command(args: argparse.Namespace, manifest: Mapping[str, Any], index:
     command = [
         sys.executable, str(_STEP4), "--input", str(manifest["input"]),
         "--instances", str(args.instances), "--vocabulary", str(args.vocabulary),
+        "--vocabulary-all", str(args.vocabulary_all), "--splits", str(args.splits),
         "--output", str(candidate_path), "--generated-vocabulary", str(generated_path),
         "--max-candidates-per-root", str(args.max_candidates_per_root),
         "--dedup-similarity-threshold", str(args.dedup_similarity_threshold),
@@ -161,7 +163,8 @@ def _load_json(path: Path) -> Any:
 
 
 def merge_worker_outputs(manifests: Sequence[Mapping[str, Any]], run_dir: Path,
-                         input_path: Path, vocabulary_path: Path) -> tuple[dict, Vocabulary]:
+                         input_path: Path, vocabulary_path: Path,
+                         vocabulary_all_path: Path, splits_path: Path) -> tuple[dict, Vocabulary]:
     merged: dict[str, dict] = {}
     generated: dict[str, Predicate] = {}
     owned_images: set[str] = set()
@@ -206,7 +209,8 @@ def merge_worker_outputs(manifests: Sequence[Mapping[str, Any]], run_dir: Path,
     merged = {image: merged[image] for image in sorted(merged)}
     combined = Vocabulary(entries=[generated[key] for key in sorted(generated)], metadata={
         "origin": "generated-by-step4-tail", "source_extract": str(input_path),
-        "parent_vocabulary": str(vocabulary_path), "count": len(generated),
+        "parent_vocabulary": {"train": str(vocabulary_path), "all": str(vocabulary_all_path)},
+        "splits": str(splits_path), "count": len(generated),
         "merged_workers": len(manifests),
     })
     return merged, combined
@@ -215,12 +219,13 @@ def merge_worker_outputs(manifests: Sequence[Mapping[str, Any]], run_dir: Path,
 def run(args: argparse.Namespace) -> int:
     if args.llm_tail:
         raise ValueError("并行 step4 暂不支持 --llm-tail：尾部请求按类别批量处理，分片会改变批次和类别级生成上限")
-    for name in ("input", "instances", "vocabulary"):
+    for name in ("input", "instances", "vocabulary", "vocabulary_all", "splits"):
         if not getattr(args, name).is_file():
             raise FileNotFoundError(f"找不到 {name}：{getattr(args, name)}")
     if args.max_candidates_per_root < 0:
         raise ValueError("--max-candidates-per-root 必须 ≥0")
-    source_paths = {args.input.resolve(), args.instances.resolve(), args.vocabulary.resolve()}
+    source_paths = {args.input.resolve(), args.instances.resolve(), args.vocabulary.resolve(),
+                    args.vocabulary_all.resolve(), args.splits.resolve()}
     output_paths = {args.output.resolve(), args.generated_vocabulary.resolve()}
     if len(output_paths) != 2:
         raise ValueError("候选输出与生成词表输出路径必须不同")
@@ -266,7 +271,7 @@ def run(args: argparse.Namespace) -> int:
                     run_dir / f"worker-{index:03d}-generated.json"
                 )
         merged_candidates, merged_generated = merge_worker_outputs(
-            manifests, run_dir, args.input, args.vocabulary
+            manifests, run_dir, args.input, args.vocabulary, args.vocabulary_all, args.splits
         )
 
         # 两个结果均先写成临时文件；只有 worker 与合并校验全部成功后才发布。

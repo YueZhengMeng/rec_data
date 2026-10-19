@@ -23,12 +23,12 @@ from recsub.console import configure_console
 from recsub.crop import AdaptiveCropper
 from recsub.extract import file_digest, run_fingerprint
 from recsub.io import ensure_parent, iter_jsonl, write_json_atomic
-from recsub.local_runtime import (
-    broadcast_object, create_accelerator, ordered_records, validate_runtime,
-)
 from recsub.judgment import (
     build_work, completed_judgments, expand_labels, load_caption_predicates,
     parse_labels, ratio_prune, restrict_labels,
+)
+from recsub.local_runtime import (
+    broadcast_object, create_accelerator, ordered_records, validate_runtime,
 )
 from recsub.prompts import PREDICATE_JUDGMENT_PROMPT, build_judgment_prompt
 

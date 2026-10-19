@@ -344,13 +344,13 @@ def write_run_fingerprint(output: str | Path, fingerprint: str) -> Path:
 
 
 def check_or_claim_run_fingerprint(
-    output: str | Path,
-    fingerprint: str,
-    *,
-    has_records: bool,
-    check_fingerprint: bool = True,
-    claim: bool = True,
-    mismatch_message: str,
+        output: str | Path,
+        fingerprint: str,
+        *,
+        has_records: bool,
+        check_fingerprint: bool = True,
+        claim: bool = True,
+        mismatch_message: str,
 ) -> None:
     """校验已有结果的标记，或在空输出上按需认领路径。
 

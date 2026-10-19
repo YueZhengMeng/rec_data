@@ -42,12 +42,24 @@ step8_review_sheet.py               本地浏览器审核 → decisions / final 
 
 ```bash
 # Windows PowerShell
-$env:DASHSCOPE_API_KEY = "..."
+$env:REC_PROVIDER = "qwen"       # qwen 或 deepseek
+$env:DASHSCOPE_API_KEY = "..."   # REC_PROVIDER=qwen
+$env:DEEPSEEK_API_KEY = "..."    # REC_PROVIDER=deepseek
+$env:REC_API_KEY = "..."         # 可选；优先于上面的 provider 专用 key
+$env:REC_MODEL = "qwen3.8-flash"  # deepseek 时可用 deepseek-flash
+$env:REC_BASE_URL = "..."         # 可选；按 provider 有默认值
 $env:REC_IMAGE_DIR = "F:/REC-8K/rec-8k/"
-$env:REC_MODEL = "qwen3.8-flash"
 $env:REC_EMBEDDING_MODEL = "F:/model/Qwen3-Embedding-0.6B"
 $env:REC_LOCAL_MODEL = "F:/model/Qwen3.5-0.8B"
 ```
+
+```text
+REC_PROVIDER=qwen      → DashScope / qwen3.8-flash
+REC_PROVIDER=deepseek  → DeepSeek / deepseek-flash
+```
+
+在线请求统一使用 Chat Completions 的三张 JPEG `image_url` data URL。默认关闭思考；需要时在命令行加 `--enable-thinking`
+。DeepSeek 使用官方视觉模型和 Chat Completions 接口时，保持当前消息格式，不要改成 Responses API 的 `input_image` 格式。
 
 `recsub/config.py` 的段落与消费者一一对应：`online`（在线端点与并发/重试/超时）、
 `local`（本地 Qwen 的模型与生成参数）、`paths`（全部产物路径）、`extract`（step3
@@ -55,6 +67,28 @@ $env:REC_LOCAL_MODEL = "F:/model/Qwen3.5-0.8B"
 `judge`（step5 探针与恒定条件）、`gates`、`review`、`visualize`。
 
 所有脚本从项目根目录运行。Windows 控制台由脚本自动切换 UTF-8。
+
+### 在线采样默认值
+
+`CONFIG["online"]["sampling"]` 按 provider 和思考模式设置，step3/step4 沿用官方默认；step5 仅对 Qwen 覆盖
+`presence_penalty=0.0`，DeepSeek 不发送该覆盖。本地模型参数不变。
+
+| 模型 / 模式                    |    temperature |  top_p |  top_k | presence_penalty | repetition_penalty |
+|--------------------------------|---------------:|-------:|-------:|-----------------:|-------------------:|
+| Qwen3.8-Flash 非思考（默认）   |            0.7 |    0.8 |     20 |              1.5 |                1.0 |
+| Qwen3.8-Flash 思考（视觉输入） |            0.6 |   0.95 |     20 |              0.0 |                1.0 |
+| deepseek-flash 非思考（默认）  |            1.0 | 不发送 | 不发送 |           不发送 |             不发送 |
+| deepseek-flash 思考            | 不生效，不发送 | 不发送 | 不发送 |           不发送 |             不发送 |
+
+- Qwen
+  各模式的共享采样值采用[官方 API 默认值](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)
+  ；step5 仅将 Qwen 的 `presence_penalty` 覆盖为 `0.0`，以避免判断输出中的候选短语受到重复抑制；其他 Qwen 参数仍使用官方对应模式默认值。
+- DeepSeek 仅非思考模式显式使用 `temperature=1.0`
+  ，这是[官方“数据抽取/分析”的推荐值](https://api-docs.deepseek.com/zh-cn/quick_start/parameter_settings/)
+  。按[官方思考模式文档](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)，思考模式下 temperature
+  不生效，因此不发送；其他采样参数仍使用服务端默认，不发送 top_p=0.95 或 presence_penalty 覆盖。
+- 采样设置同时纳入 step3/step5 续跑指纹；改参数后建议使用新输出文件及 `--check-fingerprint`
+  ，避免混用结果。未做在线质量调优，这些是有文档依据的起始设置，不保证跨请求完全确定。
 
 ## 运行流程
 
@@ -170,7 +204,7 @@ JPEG base64、本地传 PIL/processor 输入，图像编码不是逐字节相同
 prompt、裁剪、候选或实例表等配置与历史结果不同。成功 ID 仍跳过、失败 ID 仍重试。
 
 - `--check-fingerprint`：显式启用严格检查，已有非空结果的指纹不同或标记缺失即拒绝续跑。
-- `--no-check-fingerprint`：显式跳过指纹检查（也是当前默认行为），但**不跳过**结果 JSONL 格式、
+- `--no-check-fingerprint`：显式跳过指纹检查（也是当前默认行为），但 **不跳过**结果 JSONL 格式、
   现有记录结构或抽样清单校验；step5 探针模式也仍不能对部分结果续跑。
 - 跳过时不改写已有 `.run.json`（包括损坏标记），非空结果缺标记时也不补写。标记不代表
   混合结果中的每条记录都来自同一配置；需要配置可追溯的实验应启用检查并使用新的 `--output`。
@@ -242,7 +276,21 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python step4_normalize_predicates_parallel.py \
 `--llm-tail`，因为 tail 批次和类别级生成上限会因分片而变化。Windows PowerShell 可先设置
 `$env:CUDA_VISIBLE_DEVICES="0,1,2,3"` 再运行 Python 命令。
 
-step4 先按根对开放短语做字符串与向量去重，再在 **整张人工审核词表**里匹配；
+step4 按 `anno/splits.json` 的 `(图片名, caption)` 根选择归一化词表：训练集使用
+`anno/attribute_vocabulary_train.json`，val/test 共用 `anno/attribute_vocabulary_all.json`。
+默认路径可分别用 `--vocabulary`、`--vocabulary-all` 和 `--splits` 覆盖，例如：
+
+```bash
+python step4_normalize_predicates.py --input anno/extract_result_local.jsonl \\
+  --vocabulary anno/attribute_vocabulary_train.json \\
+  --vocabulary-all anno/attribute_vocabulary_all.json --splits anno/splits.json \\
+  --no-embedding --no-llm-tail
+```
+
+每个待处理根必须恰好属于 train/val/test 之一；未列入划分或重复划分会报错。切换词表策略后，
+需重跑 step4，并重新生成依赖其候选的 step5 及后续产物；已有候选不会自动更新。
+
+step4 先按根对开放短语做字符串与向量去重，再在当前根对应的人工审核词表里匹配；
 词表不同写法只预编码一次并缓存在归一化器中；同图所有 caption 的开放短语
 合并后以最多 256 条为一批编码，图片处理完清理临时向量（即使提取文件乱序也按图归并）。
 如果入选候选与同图其他 caption 的原标注/开放属性 **字符串相同**（忽略大小写、
@@ -377,6 +425,8 @@ python step7_visualize.py --image-names 0001-fsc147-1306.jpg
 
 直接读取 step6 的 `fine_grained_subsets.jsonl`（无需 step1 实例表）。原始类别、原始
 caption、新增用于划分子集的属性都显示在图片右侧；图片标题只保留流程和子集编号。
+红叉标记当前子集正样本，绿点标记同根 caption 中其余实例（根实例集减去当前子集，
+包括 unknown；仅作显示分组，不把 unknown 改成 no）。互补节点不单独生成图片。
 默认输出到 `show_subsets/positive/`，文件名包含 step6 的稳定 `node_id`。缺图默认跳过。
 
 ### 8. 浏览器人工审核
@@ -395,7 +445,8 @@ python step8_review_sheet.py --serve --reviewer r2 --shard 3249:6498
 
 浏览器里用 `K` keep、`D` discard、`U` 全标 unknown、`M` 改显示词、空格下一条、
 `B` 上一条。每次决策立即追加到 `review/decisions_<reviewer>.jsonl`，中断可续审。
-审核预览与 step7 使用同一单子集布局；审核模式额外显示 no/unknown 点。
+审核预览与 step7 使用同一单子集布局及红叉/绿点标记，不再单独绘制 no/unknown 颜色。
+已有审核条目建议重新运行 `--build` 以保存精确的同根其余实例坐标；不改动 decisions 文件。
 
 多人结束后：
 

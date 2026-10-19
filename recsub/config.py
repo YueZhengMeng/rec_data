@@ -22,22 +22,43 @@ def _env(name: str, default: Any) -> Any:
     return default if value is None or value == "" else value
 
 
+_PROVIDER = "deepseek"
+_PROVIDER_DEFAULTS = {
+    "qwen": {
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "base_url": "https://batch.dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen3.8-flash",
+    },
+    "deepseek": {
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+    },
+}
+if _PROVIDER not in _PROVIDER_DEFAULTS:
+    raise ValueError(
+        f"REC_PROVIDER 必须是 qwen 或 deepseek，实际为 {_PROVIDER!r}"
+    )
+_PROVIDER_DEFAULT = _PROVIDER_DEFAULTS[_PROVIDER]
+_API_KEY = os.getenv("REC_API_KEY") or os.getenv(_PROVIDER_DEFAULT["api_key_env"])
+
 CONFIG: dict[str, Any] = {
     # ---- 在线多模态端点 ----
-    "api_key": os.getenv("DASHSCOPE_API_KEY"),
-    "base_url": _env("REC_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-    "model_name": _env("REC_MODEL", "qwen3.8-flash"),
+    "provider": _PROVIDER,
+    "api_key": _API_KEY,
+    "base_url": _env("REC_BASE_URL", _PROVIDER_DEFAULT["base_url"]),
+    "model_name": _env("REC_MODEL", _PROVIDER_DEFAULT["model"]),
     "image_dir": _env("REC_IMAGE_DIR", "F:/REC-8K/rec-8k/"),
 
     # ---- 本地 Qwen 后端 ----
     # step3 与 step5 的两个本地入口共用这一套参数，模型与生成设置只有这一处默认值。
     "local": {
         "model_path": _env("REC_LOCAL_MODEL", "F:/model/Qwen3.5-0.8B"),
-        "base_model_path": None,       # None 表示与 model_path 相同
-        "adapter_path": None,          # lora / qlora 模式必须提供
-        "model_mode": "nf4",           # base / nf4 / full / lora / qlora
-        "dtype": "bfloat16",           # 计算与权重的浮点类型：bfloat16 / float16 / float32
-        "batch_size": 1,               # 每张 GPU 的实例数
+        "base_model_path": None,  # None 表示与 model_path 相同
+        "adapter_path": None,  # lora / qlora 模式必须提供
+        "model_mode": "nf4",  # base / nf4 / full / lora / qlora
+        "dtype": "bfloat16",  # 计算与权重的浮点类型：bfloat16 / float16 / float32
+        "batch_size": 1,  # 每张 GPU 的实例数
         "enable_thinking": False,
         "max_new_tokens": 2048,
         "do_sample": True,
@@ -56,31 +77,35 @@ CONFIG: dict[str, Any] = {
         "annotations": "anno/annotations.json",
         "splits": "anno/splits.json",
         # step1 产出：实例表
-        "instance_data": "anno/instance_data.jsonl",
-        # step2 产出：标注词表
-        "vocabulary": "anno/attribute_vocabulary.json",
-        "vocabulary_md": "anno/attribute_vocabulary.md",
-        "vocabulary_overrides": "anno/vocabulary_overrides.json",
+        "instance_data": "anno/instance_data_mini.jsonl",
+        # step2 产出：标注词表；vocabulary 保持 step2/all 的既有默认
+        "vocabulary": "anno/attribute_vocabulary_all.json",
+        "vocabulary_train": "anno/attribute_vocabulary_train.json",
+        "vocabulary_all": "anno/attribute_vocabulary_all.json",
+        "vocabulary_md": "anno/attribute_vocabulary_all.md",
+        "vocabulary_overrides": "anno/vocabulary_overrides_all.json",
         # step3 产出：开放提取结果，在线与本地各一份
-        "extract_result_online": "anno/extract_result_online.jsonl",
+        "extract_result_online": "anno/extract_result_qwen.jsonl",
         "extract_result_local": "anno/extract_result_local.jsonl",
-        "extract_sample_online": "anno/extract_sample_online.json",
+        "extract_sample_online": "anno/extract_sample_qwen.json",
         "extract_sample_local": "anno/extract_sample_local.json",
-        "extract_preview_online": "anno/extract_preview_online.json",
+        "extract_preview_online": "anno/extract_preview_qwen.json",
         "extract_preview_local": "anno/extract_preview_local.json",
         # step4 产出：归一化候选
-        "predicate_candidates": "anno/predicate_candidates.json",
-        "generated_vocabulary": "anno/vocabulary_generated.json",
+        "predicate_candidates_online": "anno/predicate_candidates_qwen.json",
+        "predicate_candidates_local": "anno/predicate_candidates_local.json",
+        "generated_vocabulary_online": "anno/vocabulary_generated_qwen.json",
+        "generated_vocabulary_local": "anno/vocabulary_generated_local.json",
         # step5 产出：三值判断，以及探针剪掉的「根 × 恒定条件」
-        "predicate_labels": "anno/predicate_labels.jsonl",
+        "predicate_labels_online": "anno/predicate_labels_qwen.jsonl",
         "predicate_labels_local": "anno/predicate_labels_local.jsonl",
-        "predicate_constant": "anno/predicate_constant.json",
+        "predicate_constant_online": "anno/predicate_constant_qwen.json",
         "predicate_constant_local": "anno/predicate_constant_local.json",
         # step6 产出：门禁筛选后的子集
-        "subsets": "anno/fine_grained_subsets.jsonl",
-        "subset_decisions": "anno/subset_decisions_log.jsonl",
+        "subsets": "anno/fine_grained_subsets_qwen.jsonl",
+        "subset_decisions": "anno/subset_decisions_log_qwen.jsonl",
         # step7 产出：子集可视化
-        "output_dir": "show_subsets",
+        "output_dir": "show_subsets_qwen",
         # step8 产出：人工审核与最终子集
         "review_dir": "review",
         "subsets_final": "anno/fine_grained_subsets_final.jsonl",
@@ -88,21 +113,39 @@ CONFIG: dict[str, Any] = {
 
     # ---- 在线调用 ----
     "online": {
-        "concurrency": 100,
+        "concurrency": 1000,
         "max_retries": 3,
         "timeout": 1800.0,
-        # 判断阶段的 output token 由思维链主导（实测均值 3187），需要时可用
-        # --no-enable-thinking 关掉实测。
-        "enable_thinking": True,
-        "batch_size": 100,
+        # 默认关闭思考；需要时可用 --enable-thinking 显式开启。
+        "enable_thinking": False,
+        "batch_size": 1000,
+        # Qwen 按官方视觉输入的模式默认值；DeepSeek 仅非思考模式显式传 temperature=1。
+        "sampling": {
+            "qwen": {
+                "non_thinking": {
+                    "temperature": 0.7, "top_p": 0.8, "top_k": 20,
+                    "presence_penalty": 1.5, "repetition_penalty": 1.0,
+                },
+                "thinking": {
+                    "temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                    "presence_penalty": 0.0, "repetition_penalty": 1.0,
+                },
+            },
+            "deepseek": {
+                # 非思考模式采用官方推荐的数据抽取温度；其他采样参数使用服务端默认。
+                "non_thinking": {"temperature": 1.0},
+                # 思考模式 temperature 不生效，因此不发送。
+                "thinking": {},
+            },
+        },
     },
 
     # ---- step3 开放提取的抽样与预览 ----
     "extract": {
         # 每类抽样的实例数；0 表示全量。
-        "sample_per_category_online": 2,
+        "sample_per_category_online": 0,
         "sample_per_category_local": 0,
-        "seed_online": 13,
+        "seed_online": 42,
         "seed_local": 42,
         # 提示词预览最多保存多少种 (类别, 原属性) 组合。
         "max_preview": 100,
@@ -147,7 +190,7 @@ CONFIG: dict[str, Any] = {
     # ---- 词表 ----
     "vocabulary": {
         # 只从 train 划分统计，避免 val/test 的标注词进入提示词。
-        "split": "train",
+        "split": "all",
         # 1 = 收录全部观察到的取值。归一化目标集要尽量全：person 的动作词大多只出现
         # 在一个图里，按频次过滤会把 'climbing a wall' 这类合法标签丢掉。
         "min_root_count": 1,
@@ -230,6 +273,19 @@ def resolve_dir(value: str | Path) -> Path:
     """命令行传入的目录同样相对项目根目录解析。"""
     resolved = Path(value)
     return resolved if resolved.is_absolute() else PROJECT_ROOT / resolved
+
+
+def online_sampling(provider: str | None = None,
+                    enable_thinking: bool | None = None,
+                    *, presence_penalty: float | None = None) -> dict[str, Any]:
+    """在线请求和续跑指纹使用同一套采样参数；返回副本以免修改集中配置。"""
+    settings = CONFIG["online"]
+    provider = CONFIG["provider"] if provider is None else provider
+    thinking = settings["enable_thinking"] if enable_thinking is None else enable_thinking
+    sampling = dict(settings["sampling"][provider]["thinking" if thinking else "non_thinking"])
+    if provider == "qwen" and presence_penalty is not None:
+        sampling["presence_penalty"] = presence_penalty
+    return sampling
 
 
 def crop_config():

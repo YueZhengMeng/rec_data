@@ -16,11 +16,11 @@ LABELS = ("yes", "no", "unknown")
 
 
 def completed_judgments(
-    output: Path,
-    fingerprint: str,
-    *,
-    claim: bool = True,
-    check_fingerprint: bool = True,
+        output: Path,
+        fingerprint: str,
+        *,
+        claim: bool = True,
+        check_fingerprint: bool = True,
 ) -> tuple[set[int], int]:
     """读已完成实例并按需校验运行指纹。
 

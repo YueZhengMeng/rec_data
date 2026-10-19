@@ -14,7 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from recsub.config import CONFIG, crop_config, path
+from recsub.config import CONFIG, crop_config, online_sampling, path
 from recsub.console import configure_console
 from recsub.extract import (
     completed_ids, extraction_record, file_digest, iter_selected, parse_attributes,
@@ -29,10 +29,12 @@ from recsub.prompts import build_instance_messages
 
 def fingerprint_for(args: argparse.Namespace) -> str:
     return run_fingerprint({
-        "backend": "online", "instances_sha256": file_digest(args.instances),
+        "backend": "online", "provider": CONFIG["provider"],
+        "instances_sha256": file_digest(args.instances),
         "image_dir": str(Path(args.image_dir).resolve()),
         "model": CONFIG["model_name"], "base_url": CONFIG["base_url"],
         "enable_thinking": args.enable_thinking,
+        "sampling": online_sampling(enable_thinking=args.enable_thinking),
         "crop": asdict(crop_config()), "prompt": EXTRACT_ATTRIBUTES_PROMPT,
     })
 

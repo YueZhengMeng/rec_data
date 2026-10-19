@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from PIL import Image, ImageDraw, ImageFont
 
 from recsub.io import iter_jsonl
 
-YES = (15, 150, 90)
-NO = (205, 55, 50)
-UNKNOWN = (105, 105, 105)
+POSITIVE_MARKER = (181, 31, 50)
+OTHER_MARKER = (25, 158, 112)
+# Legacy import name; current subset membership is encoded by a red cross.
+YES = OTHER_MARKER
 PAGE_BACKGROUND = (249, 249, 247)
 SIDEBAR_BACKGROUND = (252, 252, 251)
 BORDER = (220, 220, 215)
@@ -28,7 +29,7 @@ TITLE_HEIGHT = 62
 MARGIN = 20
 PANEL_GAP = 18
 PANEL_PADDING = 14
-MIN_PANEL_HEIGHT = 360
+MIN_PANEL_HEIGHT = 420
 
 
 def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
@@ -114,6 +115,9 @@ def load_subset_nodes(annotations_path: str | Path, *, positive_only: bool = Tru
             if missing:
                 raise ValueError(f"子集 {key} 的实例 {missing[:5]} 不在 step6 根节点中")
             node[output] = [point_by_id[instance_id] for instance_id in ids]
+        yes_ids = {int(value) for value in node.get("instance_ids", ())}
+        node["other_instance_ids"] = [i for i in point_by_id if i not in yes_ids]
+        node["other_points"] = [point_by_id[i] for i in node["other_instance_ids"]]
     return subsets
 
 
@@ -126,13 +130,26 @@ def _draw_point(draw: ImageDraw.ImageDraw, point: Sequence[float], scale: float,
                  fill=color, outline="white", width=max(1, radius // 3))
 
 
+def _draw_cross(draw: ImageDraw.ImageDraw, point: Sequence[float], scale: float,
+                origin: tuple[int, int], radius: int = 6) -> None:
+    x = origin[0] + float(point[0]) * scale
+    y = origin[1] + float(point[1]) * scale
+    diagonals = ((x - radius, y - radius, x + radius, y + radius),
+                 (x - radius, y + radius, x + radius, y - radius))
+    # Paint both halo strokes first so the crossing stays red at its center.
+    for color, width in (("white", 5), (POSITIVE_MARKER, 3)):
+        for line in diagonals:
+            draw.line(line, fill=color, width=width)
+
+
 def _draw_field(draw: ImageDraw.ImageDraw, x: int, y: int, label: str, value: Any,
                 width: int) -> int:
     label_font = font(12, True)
     value_font = font(13)
     draw.text((x, y), label, fill=SECONDARY, font=label_font)
     y += 18
-    for line in wrap_text(draw, str(value or "—"), width, value_font)[:4]:
+    value_text = "—" if value is None or value == "" else str(value)
+    for line in wrap_text(draw, value_text, width, value_font)[:4]:
         draw.text((x, y), line, fill=PRIMARY, font=value_font)
         y += 18
     return y + 8
@@ -143,9 +160,9 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
                   max_height: int = 850, sidebar_width: int = 520) -> Image.Image:
     """Render exactly one subset with its metadata in a right-hand sidebar.
 
-    ``positive`` draws only the step6 ``instance_ids``.  ``review`` additionally
-    draws the node's no/unknown partitions so the reviewer can inspect the complete
-    tri-valued judgment while using the same geometry and metadata layout.
+    Both ``positive`` and ``review`` use red crosses for the current subset and
+    green dots for the remaining instances of the same caption root.  These are
+    display groups only: unknown labels are not rewritten as no.
     """
     if mode not in {"positive", "review"}:
         raise ValueError("mode 必须是 positive 或 review")
@@ -160,8 +177,7 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
     draw = ImageDraw.Draw(canvas)
     draw.text((MARGIN, 12), f"REC-8K fine-grained subset #{subset_index}",
               fill=(10, 10, 10), font=font(22, True))
-    subtitle = "step7 visualization · green dots = subset instances" if mode == "positive" else \
-        "step8 review preview · green=yes · red=no · gray=unknown"
+    subtitle = "red crosses = subset positives · green dots = other instances in caption root"
     draw.text((MARGIN, 40), subtitle, fill=(80, 80, 80), font=font(13))
 
     top = TITLE_HEIGHT + MARGIN
@@ -169,13 +185,15 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
     canvas.paste(displayed, origin)
     draw.rectangle((origin[0] - 1, origin[1] - 1,
                     origin[0] + displayed.width, origin[1] + displayed.height), outline=BORDER)
-    if mode == "review":
-        for field, color, radius in (("unknown_points", UNKNOWN, 5),
-                                     ("no_points", NO, 6)):
-            for point in node.get(field, ()):
-                _draw_point(draw, point, scale, color, radius, origin)
+    # Older review_items.jsonl stored only the complete no/unknown partitions.
+    # New items use the exact root-minus-subset coordinates supplied by the loader.
+    other_points = node.get("other_points")
+    if other_points is None:
+        other_points = [*node.get("no_points", ()), *node.get("unknown_points", ())]
+    for point in other_points:
+        _draw_point(draw, point, scale, OTHER_MARKER, 5, origin)
     for point in node.get("yes_points", ()):
-        _draw_point(draw, point, scale, YES, 7, origin)
+        _draw_cross(draw, point, scale, origin)
 
     sidebar_x = MARGIN + displayed.width + PANEL_GAP
     draw.rounded_rectangle((sidebar_x, top, sidebar_x + sidebar_width, top + panel_h),
@@ -186,13 +204,16 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
     cursor = top + 14
     cursor = _draw_field(draw, text_x, cursor, "原始类别", node.get("category"), text_width)
     cursor = _draw_field(draw, text_x, cursor, "原始 caption", node.get("caption"), text_width)
-    cursor = _draw_field(draw, text_x, cursor, "新增划分属性", predicate.get("display") or predicate.get("predicate_id"), text_width)
+    cursor = _draw_field(draw, text_x, cursor, "新增划分属性",
+                         predicate.get("display") or predicate.get("predicate_id"), text_width)
     dimension_value = " / ".join(str(value) for value in (predicate.get("dimension"), predicate.get("value")) if value)
     cursor = _draw_field(draw, text_x, cursor, "属性维度 / 取值", dimension_value, text_width)
     raw = "、".join(str(value) for value in (predicate.get("raw_phrases") or ()))
     cursor = _draw_field(draw, text_x, cursor, "来源 / 原始短语",
                          f"{predicate.get('source') or '—'} / {raw or '—'}", text_width)
-    cursor = _draw_field(draw, text_x, cursor, "子集 yes 实例数", len(node.get("instance_ids", ())), text_width)
+    cursor = _draw_field(draw, text_x, cursor, "子集正样本数（红叉）",
+                         len(node.get("instance_ids", node.get("yes_ids", ()))), text_width)
+    cursor = _draw_field(draw, text_x, cursor, "同根其余实例数（绿点）", len(other_points), text_width)
     if mode == "review":
         review = node.get("review") or {}
         _draw_field(draw, text_x, cursor, "审核状态", review.get("status", "pending"), text_width)

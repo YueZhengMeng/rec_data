@@ -25,7 +25,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from recsub.config import CONFIG, crop_config, path
+from recsub.config import CONFIG, crop_config, online_sampling, path
 from recsub.console import configure_console
 from recsub.extract import file_digest, run_fingerprint
 from recsub.io import (
@@ -41,15 +41,22 @@ from recsub.judgment import (
 from recsub.llm_api import OnlineModel, build_cropper, load_three_views
 from recsub.prompts import PREDICATE_JUDGMENT_PROMPT, build_instance_messages, build_judgment_prompt
 
+# 仅在 step5 覆盖 Qwen 的 presence_penalty，允许候选短语原样重复；DeepSeek 不发送。
+PRESENCE_PENALTY = 0.0
+
 
 def judgment_fingerprint(args: argparse.Namespace) -> str:
     """绑定候选顺序、裁剪与判断参数；更换其中任一项后必须用新的输出文件。"""
     return run_fingerprint({
-        "backend": "online",
+        "backend": "online", "provider": CONFIG["provider"],
         "candidates_sha256": file_digest(args.candidates),
         "instances_sha256": file_digest(args.instances),
         "image_dir": str(Path(args.image_dir).resolve()),
-        "model": CONFIG["model_name"], "enable_thinking": args.enable_thinking,
+        "model": CONFIG["model_name"], "base_url": CONFIG["base_url"],
+        "enable_thinking": args.enable_thinking,
+        "sampling": online_sampling(
+            enable_thinking=args.enable_thinking, presence_penalty=PRESENCE_PENALTY,
+        ),
         "probe_per_caption": args.probe_per_caption,
         "probe_min_instances": args.probe_min_instances,
         "constant_yes_ratio": args.constant_yes_ratio,
@@ -125,6 +132,7 @@ async def run(args: argparse.Namespace) -> int:
         concurrency=args.concurrency,
         max_retries=args.max_retries,
         enable_thinking=args.enable_thinking,
+        presence_penalty=PRESENCE_PENALTY,
     )
     writer = get_writer(args.output)
     counters = Counter()
@@ -229,15 +237,15 @@ async def run(args: argparse.Namespace) -> int:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="逐实例闭集三值判断")
     parser.add_argument("--instances", type=Path, default=path("instance_data"))
-    parser.add_argument("--candidates", type=Path, default=path("predicate_candidates"),
+    parser.add_argument("--candidates", type=Path, default=path("predicate_candidates_online"),
                         help="归一化候选（step4 产出）")
     parser.add_argument("--image-dir", default=CONFIG["image_dir"],
                         help="原图目录")
-    parser.add_argument("--output", type=Path, default=path("predicate_labels"))
+    parser.add_argument("--output", type=Path, default=path("predicate_labels_online"))
     parser.add_argument("--check-fingerprint", action=argparse.BooleanOptionalAction,
                         default=CONFIG["resume"]["check_fingerprint"],
                         help="校验输出旁挂的运行指纹；关闭后不会读取既有标记")
-    parser.add_argument("--constant-output", type=Path, default=path("predicate_constant"),
+    parser.add_argument("--constant-output", type=Path, default=path("predicate_constant_online"),
                         help="探针剪掉的「根×恒定条件」记录")
     parser.add_argument("--image-names", default=None)
     parser.add_argument("--batch-size", type=int, default=CONFIG["online"]["batch_size"])
