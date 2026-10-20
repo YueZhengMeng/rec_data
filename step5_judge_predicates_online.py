@@ -23,7 +23,7 @@ import sys
 from collections import Counter, defaultdict
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from recsub.config import CONFIG, crop_config, online_sampling, path
 from recsub.console import configure_console
@@ -39,10 +39,12 @@ from recsub.judgment import (
     parse_labels, ratio_prune, restrict_labels,
 )
 from recsub.llm_api import OnlineModel, build_cropper, load_three_views
+from recsub.online_batch import run_online_batch
 from recsub.prompts import PREDICATE_JUDGMENT_PROMPT, build_instance_messages, build_judgment_prompt
 
 # 仅在 step5 覆盖 Qwen 的 presence_penalty，允许候选短语原样重复；DeepSeek 不发送。
 PRESENCE_PENALTY = 0.0
+Sink = Callable[[dict], Awaitable[None]]
 
 
 def judgment_fingerprint(args: argparse.Namespace) -> str:
@@ -155,64 +157,70 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  进度 {counters['written']}/{total_instances}  "
                   f"已判 {counters['judged']} 失败 {counters['failed']}")
 
-    async def dispatch(items: Sequence[dict], phrases_for: Mapping, sink: Sink) -> None:
-        """按批并发判断一组实例，逐条交给 ``sink``。"""
+    async def dispatch(items: Sequence[dict], phrases_for: Mapping, sink: Sink,
+                       *, phase: str = "判断") -> None:
+        """按批并发判断，结果返回后立即交给 sink，不等待其他请求。"""
         batch_size = max(1, args.batch_size)
-        for start in range(0, len(items), batch_size):
+        total_batches = (len(items) + batch_size - 1) // batch_size
+
+        async def handle(item: Mapping[str, Any]) -> None:
+            record = await judge_one(
+                online, cropper, item, phrases_for[(item["image_name"], item["caption"])],
+                args.image_dir,
+            )
+            await sink(record)
+
+        for batch_number, start in enumerate(range(0, len(items), batch_size), 1):
             batch = items[start:start + batch_size]
-            results = await asyncio.gather(*(
-                judge_one(online, cropper, item, phrases_for[(item["image_name"], item["caption"])], args.image_dir)
-                for item in batch
-            ))
-            for record in results:
-                await sink(record)
+            await run_online_batch(batch, handle,
+                                   desc=f"step5 {phase} batch {batch_number}/{total_batches}")
 
     active_phrases: dict = dict(phrases_by_root)
     constant_pairs: dict[str, list[str]] = {}
 
-    if args.probe_per_caption > 0:
-        probe_items = [item for items in work.values() for item in items[:args.probe_per_caption]]
-        collected: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    try:
+        if args.probe_per_caption > 0:
+            probe_items = [item for items in work.values() for item in items[:args.probe_per_caption]]
+            collected: dict[tuple[str, str], list[dict]] = defaultdict(list)
 
-        async def collect(record: dict) -> None:
-            if not record.get("judgment_failed"):
-                collected[(record["image_name"], record["caption"])].append(record)
+            async def collect(record: dict) -> None:
+                if not record.get("judgment_failed"):
+                    collected[(record["image_name"], record["caption"])].append(record)
 
-        print(f"⏳ 探针轮：{len(probe_items)} 个实例")
-        await dispatch(probe_items, active_phrases, collect)
+            print(f"⏳ 探针轮：{len(probe_items)} 个实例")
+            await dispatch(probe_items, active_phrases, collect, phase="探针")
 
-        pool = Counter()
-        for key, phrases in phrases_by_root.items():
-            kept, pruned = ratio_prune(
-                collected.get(key, ()), phrases,
-                args.constant_yes_ratio, args.constant_no_ratio, args.probe_min_instances,
-            )
-            active_phrases[key] = tuple(kept)
-            if pruned:
-                constant_pairs[f"{key[0]}\t{key[1]}"] = list(pruned)
-                pool.update(pruned)
-        print(f"✅ 探针剪掉 {sum(len(v) for v in constant_pairs.values())} 个「根×条件」"
-              f"（几乎恒定，无法划分父集）")
-        if pool:
-            print(f"   被剪最多的条件：{dict(pool.most_common(8))}")
+            pool = Counter()
+            for key, phrases in phrases_by_root.items():
+                kept, pruned = ratio_prune(
+                    collected.get(key, ()), phrases,
+                    args.constant_yes_ratio, args.constant_no_ratio, args.probe_min_instances,
+                )
+                active_phrases[key] = tuple(kept)
+                if pruned:
+                    constant_pairs[f"{key[0]}\t{key[1]}"] = list(pruned)
+                    pool.update(pruned)
+            print(f"✅ 探针剪掉 {sum(len(v) for v in constant_pairs.values())} 个「根×条件」"
+                  f"（几乎恒定，无法划分父集）")
+            if pool:
+                print(f"   被剪最多的条件：{dict(pool.most_common(8))}")
 
-        # 探针轮的标签在存活条件上仍然有效，过滤后保留，不重问。
-        for key, records in collected.items():
-            survivors = active_phrases.get(key, ())
-            for record in records:
-                await write_record(restrict_labels(record, survivors))
-        # 探针轮失败或没跑到的实例（样本不足时该根仍保留全部条件）也在这个集合里，
-        # 下面按全量再跑一遍：已完成集合里没有它们，不会重复计数。
-        judged_ids = {record["instance_id"] for records in collected.values() for record in records}
-        remaining = [item for items in work.values() for item in items
-                     if item["instance_id"] not in judged_ids]
-        print(f"⏳ 剩余 {len(remaining)} 个实例按剪枝后的条件判断")
-        await dispatch(remaining, active_phrases, write_record)
-    else:
-        await dispatch([item for items in work.values() for item in items],
-                       active_phrases, write_record)
-
-    close_all()
+            # 探针轮的标签在存活条件上仍然有效，过滤后保留，不重问。
+            for key, records in collected.items():
+                survivors = active_phrases.get(key, ())
+                for record in records:
+                    await write_record(restrict_labels(record, survivors))
+            # 探针失败的实例仍在 remaining 中，按剪枝后的条件重试。
+            judged_ids = {record["instance_id"] for records in collected.values() for record in records}
+            remaining = [item for items in work.values() for item in items
+                         if item["instance_id"] not in judged_ids]
+            print(f"⏳ 剩余 {len(remaining)} 个实例按剪枝后的条件判断")
+            await dispatch(remaining, active_phrases, write_record)
+        else:
+            await dispatch([item for items in work.values() for item in items],
+                           active_phrases, write_record)
+    finally:
+        close_all()
 
     if constant_pairs:
         write_json_atomic(args.constant_output, {

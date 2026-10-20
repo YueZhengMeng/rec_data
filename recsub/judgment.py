@@ -47,30 +47,60 @@ def completed_judgments(
     return completed, written
 
 
-def load_caption_predicates(candidates_path: Path) -> tuple[dict, dict, dict]:
-    """读候选并整理成「根 → 谓词 / 问句 / 问句→ID」。"""
+def iter_candidate_entries(candidates_path: Path):
+    """产出 ``(图片, caption, 记录)``；``.jsonl`` 为新格式，其余按旧嵌套 JSON 读。"""
+    candidates_path = Path(candidates_path)
+    if candidates_path.suffix.lower() == ".jsonl":
+        for record in iter_jsonl(candidates_path):
+            if not isinstance(record, Mapping):
+                raise ValueError(f"{candidates_path} 的候选记录必须是对象")
+            image_name = record.get("image_name")
+            caption = record.get("caption")
+            if image_name is None or caption is None:
+                raise ValueError(
+                    f"{candidates_path} 的候选记录缺少 image_name/caption：{record!r}")
+            yield str(image_name), str(caption), record
+        return
+
     with candidates_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{candidates_path} 顶层必须是对象")
+    for image_name, captions in payload.items():
+        if not isinstance(captions, Mapping):
+            raise ValueError(f"{candidates_path} 图片 {image_name!r} 的 caption 数据必须是对象")
+        for caption, entry in captions.items():
+            if not isinstance(entry, Mapping):
+                raise ValueError(f"{candidates_path} {image_name!r} / {caption!r} 的记录必须是对象")
+            yield str(image_name), str(caption), entry
 
+
+def load_caption_predicates(candidates_path: Path) -> tuple[dict, dict, dict]:
+    """读候选并整理成「根 → 谓词 / 问句 / 问句→ID」。
+
+    候选文件按后缀区分：``.jsonl`` 是 step4 现在的一行一条格式，``.json`` 是
+    图片 → caption 的旧嵌套格式，两种都能直接读。
+    """
     by_root: dict[tuple[str, str], list[dict]] = {}
     phrases_by_root: dict[tuple[str, str], tuple[str, ...]] = {}
     ids_by_display: dict[tuple[str, str], dict[str, list[str]]] = {}
-    for image_name, captions in payload.items():
-        for caption, entry in captions.items():
-            key = (str(image_name), str(caption))
-            predicates = flatten_candidates(entry)
-            by_root[key] = predicates
-            display_map: dict[str, list[str]] = defaultdict(list)
-            ordered: list[str] = []
-            for predicate in predicates:
-                display = str(predicate.get("display") or predicate.get("value") or "")
-                if not display:
-                    continue
-                if display not in display_map:
-                    ordered.append(display)
-                display_map[display].append(str(predicate["predicate_id"]))
-            phrases_by_root[key] = tuple(ordered)
-            ids_by_display[key] = dict(display_map)
+    for image_name, caption, entry in iter_candidate_entries(candidates_path):
+        key = (image_name, caption)
+        if key in by_root:
+            raise ValueError(f"{candidates_path} 出现重复的根：{key!r}")
+        predicates = flatten_candidates(entry)
+        by_root[key] = predicates
+        display_map: dict[str, list[str]] = defaultdict(list)
+        ordered: list[str] = []
+        for predicate in predicates:
+            display = str(predicate.get("display") or predicate.get("value") or "")
+            if not display:
+                continue
+            if display not in display_map:
+                ordered.append(display)
+            display_map[display].append(str(predicate["predicate_id"]))
+        phrases_by_root[key] = tuple(ordered)
+        ids_by_display[key] = dict(display_map)
     return by_root, phrases_by_root, ids_by_display
 
 

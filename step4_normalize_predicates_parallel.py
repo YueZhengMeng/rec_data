@@ -25,7 +25,7 @@ from typing import Any, Mapping, Sequence
 from recsub.config import CONFIG, path
 from recsub.console import configure_console
 from recsub.instances import enrich_with_instances
-from recsub.io import iter_jsonl, write_json_atomic
+from recsub.io import iter_jsonl, write_json_atomic, write_jsonl_atomic
 from recsub.vocabulary import Predicate, Vocabulary
 
 _STEP4 = Path(__file__).with_name("step4_normalize_predicates.py")
@@ -124,7 +124,7 @@ def prepare_shards(input_path: Path, instances_path: Path, run_dir: Path,
 
 def worker_command(args: argparse.Namespace, manifest: Mapping[str, Any], index: int,
                    run_dir: Path) -> tuple[list[str], dict[str, str], Path]:
-    candidate_path = run_dir / f"worker-{index:03d}-candidates.json"
+    candidate_path = run_dir / f"worker-{index:03d}-candidates.jsonl"
     generated_path = run_dir / f"worker-{index:03d}-generated.json"
     log_path = run_dir / f"worker-{index:03d}.log"
     command = [
@@ -148,24 +148,12 @@ def worker_command(args: argparse.Namespace, manifest: Mapping[str, Any], index:
     return command, env, log_path
 
 
-def _json_no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"JSON 中出现重复 key：{key!r}")
-        result[key] = value
-    return result
-
-
-def _load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle, object_pairs_hook=_json_no_duplicate_keys)
-
-
 def merge_worker_outputs(manifests: Sequence[Mapping[str, Any]], run_dir: Path,
                          input_path: Path, vocabulary_path: Path,
-                         vocabulary_all_path: Path, splits_path: Path) -> tuple[dict, Vocabulary]:
-    merged: dict[str, dict] = {}
+                         vocabulary_all_path: Path, splits_path: Path) -> tuple[list[dict], Vocabulary]:
+    """校验各 worker 的 JSONL 候选，并按 (图片, caption) 稳定合并。"""
+    merged: list[dict] = []
+    seen: set[tuple[str, str]] = set()
     generated: dict[str, Predicate] = {}
     owned_images: set[str] = set()
     for index, manifest in enumerate(manifests):
@@ -175,29 +163,28 @@ def merge_worker_outputs(manifests: Sequence[Mapping[str, Any]], run_dir: Path,
             raise ValueError(f"分片图片归属重叠：{sorted(overlap)[:5]}")
         owned_images.update(assigned)
 
-        candidates_path = run_dir / f"worker-{index:03d}-candidates.json"
+        candidates_path = run_dir / f"worker-{index:03d}-candidates.jsonl"
         generated_path = run_dir / f"worker-{index:03d}-generated.json"
         if not candidates_path.is_file() or not generated_path.is_file():
             raise FileNotFoundError(f"worker {index} 缺少候选或生成词表输出")
-        candidates = _load_json(candidates_path)
-        if not isinstance(candidates, dict):
-            raise ValueError(f"worker {index} 候选输出顶层必须是对象")
-        unexpected = set(candidates) - assigned
-        if unexpected:
-            raise ValueError(f"worker {index} 输出了未分配图片：{sorted(unexpected)[:5]}")
-        for image_name, captions in candidates.items():
-            if not isinstance(captions, dict):
-                raise ValueError(f"worker {index} 图片 {image_name!r} 的 caption 数据必须是对象")
-            expected_captions = set(manifest["captions"].get(image_name, []))
-            unexpected_captions = set(captions) - expected_captions
-            if unexpected_captions:
+        for record in iter_jsonl(candidates_path):
+            if not isinstance(record, dict):
+                raise ValueError(f"worker {index} 的候选记录必须是对象")
+            image_name = record.get("image_name")
+            caption = record.get("caption")
+            if not isinstance(image_name, str) or not isinstance(caption, str):
                 raise ValueError(
-                    f"worker {index} 图片 {image_name!r} 输出了未分配 caption："
-                    f"{sorted(unexpected_captions)[:5]}"
-                )
-            if image_name in merged:
-                raise ValueError(f"多个 worker 输出了同一图片：{image_name}")
-            merged[image_name] = captions
+                    f"worker {index} 的候选记录缺少 image_name/caption：{record!r}")
+            if image_name not in assigned:
+                raise ValueError(f"worker {index} 输出了未分配图片：{image_name!r}")
+            expected_captions = set(manifest["captions"].get(image_name, []))
+            if caption not in expected_captions:
+                raise ValueError(
+                    f"worker {index} 图片 {image_name!r} 输出了未分配 caption：{caption!r}")
+            if (image_name, caption) in seen:
+                raise ValueError(f"多个 worker 输出了同一 caption：{image_name!r} / {caption!r}")
+            seen.add((image_name, caption))
+            merged.append(record)
 
         worker_vocabulary = Vocabulary.load(generated_path)
         for entry in worker_vocabulary.entries:
@@ -206,7 +193,7 @@ def merge_worker_outputs(manifests: Sequence[Mapping[str, Any]], run_dir: Path,
                 raise ValueError(f"生成词表谓词 ID 冲突：{entry.predicate_id}")
             generated.setdefault(entry.predicate_id, entry)
 
-    merged = {image: merged[image] for image in sorted(merged)}
+    merged.sort(key=lambda record: (record["image_name"], record["caption"]))
     combined = Vocabulary(entries=[generated[key] for key in sorted(generated)], metadata={
         "origin": "generated-by-step4-tail", "source_extract": str(input_path),
         "parent_vocabulary": {"train": str(vocabulary_path), "all": str(vocabulary_all_path)},
@@ -266,7 +253,7 @@ def run(args: argparse.Namespace) -> int:
         # 空分片不启动 worker，补齐与 manifest 索引对应的合法空输出。
         for index in range(len(manifests)):
             if index not in active:
-                write_json_atomic(run_dir / f"worker-{index:03d}-candidates.json", {})
+                write_jsonl_atomic(run_dir / f"worker-{index:03d}-candidates.jsonl", [])
                 Vocabulary(entries=[], metadata={"origin": "generated-by-step4-tail"}).save(
                     run_dir / f"worker-{index:03d}-generated.json"
                 )
@@ -280,7 +267,7 @@ def run(args: argparse.Namespace) -> int:
             args.generated_vocabulary.name + ".parallel.tmp"
         )
         try:
-            write_json_atomic(staged_candidates, merged_candidates, indent=4)
+            write_jsonl_atomic(staged_candidates, merged_candidates)
             merged_generated.save(staged_generated)
             os.replace(staged_candidates, args.output)
             os.replace(staged_generated, args.generated_vocabulary)
@@ -288,7 +275,9 @@ def run(args: argparse.Namespace) -> int:
             staged_candidates.unlink(missing_ok=True)
             staged_generated.unlink(missing_ok=True)
 
-        print(f"✅ 合并完成：{len(merged_candidates)} 张图片 → {args.output}")
+        image_count = len({record["image_name"] for record in merged_candidates})
+        print(f"✅ 合并完成：{image_count} 张图片 / {len(merged_candidates)} 条 caption "
+              f"→ {args.output}")
         print(f"✅ 生成谓词 {len(merged_generated)} 条 → {args.generated_vocabulary}")
         if args.keep_temp:
             print(f"中间文件保留：{run_dir}")

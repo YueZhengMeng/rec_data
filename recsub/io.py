@@ -186,6 +186,176 @@ def _iter_json_array_stream(handle, *, label: str = "<stream>") -> Iterator[Any]
         position = end
 
 
+def iter_json_records(path: str | Path) -> Iterator[Any]:
+    """流式读取任意写法的 JSON 记录文件，内存占用与文件大小无关。
+
+    兼容三种写法：
+
+    * 一行一条的 JSONL；
+    * 顶层记录数组 ``[{...}, {...}]``（``migrate_json_to_jsonl`` 的输入）；
+    * 缩进 JSON 记录首尾相接的「JSON 流」——部分在线步骤曾把每一条记录
+      ``indent=2`` 后直接续写，文件后缀仍是 ``.jsonl``，逐行解析会立刻失败。
+
+    源文件 251MB 也不会整体载入：维持滑动缓冲区，每解析出一条记录就丢弃
+    已消费的前缀。记录之间允许空白（数组内额外允许逗号）。
+    """
+    label = str(path)
+    with Path(path).open("r", encoding="utf-8") as handle:
+        yield from _iter_json_value_stream(handle, label=label)
+
+
+def _iter_json_value_stream(handle, *, label: str = "<stream>") -> Iterator[Any]:
+    """``iter_json_records`` 的底层实现，供已经打开的文件句柄复用。"""
+    decoder = json.JSONDecoder()
+    buffer = ""
+    position = 0
+    eof = False
+
+    def read_more() -> bool:
+        """读入下一块并丢弃已消费前缀；返回 False 表示到文件末尾。"""
+        nonlocal buffer, position, eof
+        chunk = handle.read(_CHUNK_SIZE)
+        if not chunk:
+            eof = True
+            return False
+        if position:
+            buffer = buffer[position:]
+            position = 0
+        buffer += chunk
+        return True
+
+    def skip_whitespace() -> str:
+        """跳过前导空白并返回剩余内容；返回空串表示已到文件末尾。"""
+        nonlocal position
+        while True:
+            rest = buffer[position:].lstrip(_WHITESPACE)
+            if rest:
+                position = len(buffer) - len(rest)
+                return rest
+            if eof:
+                return ""
+            position = len(buffer)
+            read_more()
+
+    # 首个非空白字符是 "[" 时按顶层数组读，否则按首尾相接的记录流读。
+    rest = skip_whitespace()
+    in_array = rest.startswith("[")
+    if in_array:
+        position += 1
+
+    while True:
+        while True:
+            rest = buffer[position:]
+            if rest:
+                break
+            if eof:
+                if in_array:
+                    raise ValueError(f"{label}: 数组未闭合")
+                return
+            read_more()
+
+        char = rest[0]
+        # 记录流里的记录之间是换行，数组里还有逗号；空白一律跳过。
+        if char in _WHITESPACE or (in_array and char == ","):
+            position += 1
+            continue
+        if in_array and char == "]":
+            return
+        try:
+            value, end = decoder.raw_decode(buffer, position)
+        except json.JSONDecodeError:
+            if eof:
+                raise ValueError(f"{label}: 偏移 {position} 处的记录无法解析") from None
+            if not read_more():
+                raise ValueError(f"{label}: 文件在记录中途结束") from None
+            continue
+        position = end
+        yield value
+
+
+def iter_json_object_items(path: str | Path) -> Iterator[tuple[str, Any]]:
+    """流式读取顶层为对象的 JSON，逐对产出 ``(key, value)``。
+
+    用于「图片 → caption → 记录」这类嵌套产物（例如 step4 的候选 JSON）：
+    一次只把一个键的值解析进内存，139MB 的文件也不会整体载入。
+    """
+    label = str(path)
+    with Path(path).open("r", encoding="utf-8") as handle:
+        yield from _iter_json_object_items_stream(handle, label=label)
+
+
+def _iter_json_object_items_stream(handle, *,
+                                   label: str = "<stream>") -> Iterator[tuple[str, Any]]:
+    """``iter_json_object_items`` 的底层实现。"""
+    decoder = json.JSONDecoder()
+    buffer = ""
+    position = 0
+    eof = False
+
+    def read_more() -> bool:
+        """读入下一块并丢弃已消费前缀；返回 False 表示到文件末尾。"""
+        nonlocal buffer, position, eof
+        chunk = handle.read(_CHUNK_SIZE)
+        if not chunk:
+            eof = True
+            return False
+        if position:
+            buffer = buffer[position:]
+            position = 0
+        buffer += chunk
+        return True
+
+    def skip_whitespace() -> bool:
+        """跳过空白；返回是否还有字符可读。"""
+        nonlocal position
+        while True:
+            while position < len(buffer) and buffer[position] in _WHITESPACE:
+                position += 1
+            if position < len(buffer):
+                return True
+            if eof:
+                return False
+            read_more()
+
+    def parse_value() -> Any:
+        """解析 ``position`` 处的下一个完整值，必要时继续读文件。"""
+        nonlocal position
+        while True:
+            try:
+                value, end = decoder.raw_decode(buffer, position)
+            except json.JSONDecodeError:
+                if not read_more():
+                    raise ValueError(f"{label}: 偏移 {position} 处的值无法解析") from None
+                continue
+            position = end
+            return value
+
+    if not skip_whitespace():
+        raise ValueError(f"{label}: 文件为空")
+    if buffer[position] != "{":
+        raise ValueError(f"{label}: 顶层不是 JSON 对象")
+    position += 1
+
+    while True:
+        if not skip_whitespace():
+            raise ValueError(f"{label}: 对象未闭合")
+        char = buffer[position]
+        if char == "}":
+            return
+        if char == ",":
+            position += 1
+            continue
+        key = parse_value()
+        if not isinstance(key, str):
+            raise ValueError(f"{label}: 键必须是字符串")
+        if not skip_whitespace() or buffer[position] != ":":
+            raise ValueError(f"{label}: 键 {key!r} 后缺少冒号")
+        position += 1
+        if not skip_whitespace():
+            raise ValueError(f"{label}: 键 {key!r} 缺少值")
+        yield key, parse_value()
+
+
 # --------------------------------------------------------------------------
 # 写
 # --------------------------------------------------------------------------

@@ -8,11 +8,11 @@
 
 | 门禁 | 默认 | 作用 |
 |---|---|---|
-| G1 支持 | ``min_support=1`` 且 ``min_complement=1`` | 两侧都非空，互补预测才良定义 |
-| G2 unknown | ``max_unknown_ratio=0`` | 判断不了的不进训练 |
+| G1 支持 | ``min_support=2`` 且 ``min_complement=2`` | 两侧至少 2 个实例，避免单实例侧 |
+| G2 unknown | ``max_unknown_ratio=0.90`` | unknown 占父集比例超过 90% 时拒绝 |
 | G3 父冗余 | 硬性 | step4 已过滤，这里复验 |
 | G4 子集互冗余 | ``max_support_jaccard=0.80`` | 砍掉支持集近似相同的条件 |
-| G5 区分度 | ``min_balance=0.15`` | ``min(yes,no)/n`` 下限，砍掉 90% yes 的伪条件 |
+| G5 区分度 | ``min_balance=0.10`` | ``min(yes,no)/n`` 下限，过滤过度不均衡的划分 |
 | G6 数量上限 | ``max_predicates_per_root=3`` | 同一根最多接受的谓词数 |
 """
 

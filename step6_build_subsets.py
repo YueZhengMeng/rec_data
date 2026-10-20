@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -29,20 +28,21 @@ from recsub.config import CONFIG, path
 from recsub.console import configure_console
 from recsub.gates import GateSettings
 from recsub.io import iter_jsonl, write_jsonl_atomic
+from recsub.judgment import iter_candidate_entries
 from recsub.normalize import flatten_candidates
 from recsub.subsets import build_tree, stable_id
 
 
 def load_candidates(path_: Path) -> tuple[dict[tuple[str, str], list[dict]], dict[tuple[str, str], str | None]]:
-    with path_.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+    """读 step4 候选（JSONL；旧的嵌套 JSON 仍兼容）。"""
     result = {}
     parent_ids = {}
-    for image_name, captions in payload.items():
-        for caption, entry in captions.items():
-            key = (str(image_name), str(caption))
-            result[key] = flatten_candidates(entry)
-            parent_ids[key] = entry.get("parent_predicate_id")
+    for image_name, caption, entry in iter_candidate_entries(path_):
+        key = (image_name, caption)
+        if key in result:
+            raise ValueError(f"{path_} 出现重复的根：{key!r}")
+        result[key] = flatten_candidates(entry)
+        parent_ids[key] = entry.get("parent_predicate_id")
     return result, parent_ids
 
 
@@ -111,7 +111,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--labels", type=Path, default=path("predicate_labels_online"),
                         help="step5 三值判断 JSONL")
     parser.add_argument("--candidates", type=Path, default=path("predicate_candidates_online"),
-                        help="step4 归一化候选 JSON")
+                        help="step4 归一化候选 JSONL")
     parser.add_argument("--instances", type=Path, default=path("instance_data"))
     parser.add_argument("--output", type=Path, default=path("subsets"),
                         help="子集节点 JSONL")

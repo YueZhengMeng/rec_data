@@ -25,7 +25,7 @@ step1_data_preprocess.py            原始 annotations.json → instance_data.js
 step2_build_vocabulary.py           train 标注 → attribute_vocabulary.json / .md
 step3_extract_attributes_online.py  无词表开放式提取（在线）→ extract_result_online.jsonl
 step3_extract_attributes_local.py   同一 prompt 的本地 Qwen 版本 → extract_result_local.jsonl
-step4_normalize_predicates.py       归一化及四类预算 → predicate_candidates.json
+step4_normalize_predicates.py       归一化及四类预算 → predicate_candidates.jsonl
 step5_judge_predicates_online.py    每实例 yes/no/unknown（在线）→ predicate_labels.jsonl
 step5_judge_predicates_local.py     同一 prompt 的本地 Qwen 版本 → predicate_labels_local.jsonl
 step6_build_subsets.py              门禁 + 三值分区 → fine_grained_subsets.jsonl
@@ -33,7 +33,8 @@ step7_visualize.py                 step6 正向子集可视化（每图一个子
 step8_review_sheet.py               本地浏览器审核 → decisions / final 子集
 ```
 
-共享实现位于 `recsub/`；除了 `step*.py`，根目录没有其他可运行入口。
+共享实现位于 `recsub/`；根目录的 `fix_jsonl_format.py` 与
+`convert_predicate_candidates.py` 是一次性数据修复脚本，不属于流水线步骤。
 所有默认值集中在 `recsub/config.py`，命令行参数只覆盖单次运行。
 
 ## 首次准备
@@ -210,6 +211,18 @@ prompt、裁剪、候选或实例表等配置与历史结果不同。成功 ID �
   混合结果中的每条记录都来自同一配置；需要配置可追溯的实验应启用检查并使用新的 `--output`。
 - 此次 Global 缩放改变输入及指纹；继续旧结果不会重算已成功的实例，文件可能包含新旧尺度的结果。
 
+### 在线 batch 进度与逐条写入
+
+step3/step5 在线入口当前 `--batch-size` 默认 2000，表示每批提交的实例数；
+`--concurrency` 控制同时进行的 API 请求数（当前也为 2000），两者可分别覆盖。
+每批显示独立的进度条，包含 batch 编号、完成数/总数、耗时和速度；
+尾部剩余不超过 5 条时显示 `pending_ids`，可据此定位拖慢该批的实例。
+
+普通提取/判断每返回一条结果，就立即追加一行 JSONL 并 flush，不必等整批完成；
+进度在该条写入后更新，输出顺序是完成顺序而非 `instance_id` 顺序。
+step5 的探针轮也显示进度，但最终标签需等探针剪枝完成后才能写入；
+探针后的其余实例仍逐条即时写入。逐行 flush 不等于每条执行 `fsync`。
+
 八卡 Bash/Linux 续跑示例（保留已有模型路径和生成参数，按需补充）：
 
 ```bash
@@ -376,12 +389,17 @@ python step6_build_subsets.py --max-depth 2
 
 默认门禁（`CONFIG["gates"]`）：
 
-- `min_support=1`、`min_complement=1`；
-- `unknown_ratio <= 0`；
-- `balance=min(yes,no)/parent >= 0.15`；
+- `min_support=2`、`min_complement=2`；
+- `unknown_ratio=unknown/parent <= 0.90`，仅在超过 90% 时由 unknown 门禁拒绝；
+- `balance=min(yes,no)/parent >= 0.10`；
 - 同根支持集 Jaccard 不超过 `0.80`；
 - 每根最多 3 个谓词；
 - 可为每个通过谓词生成 `not predicate` 的互补兄弟节点。
+
+`unknown` 始终单独保存，不会补成 `no`。含 unknown 时，yes/no 仅在已知实例中互补，
+完整父集计数应满足 `parent = yes + no + unknown`，不能直接使用 `parent = yes + no`。
+另外，当前 balance 按完整父集计算，要求 yes/no 各占至少 10%，因此 unknown 超过 80%
+时即使通过 90% 的 unknown 上限，也会被平衡度门禁拒绝。
 
 节点显式保留三值：
 
@@ -429,35 +447,31 @@ caption、新增用于划分子集的属性都显示在图片右侧；图片标�
 包括 unknown；仅作显示分组，不把 unknown 改成 no）。互补节点不单独生成图片。
 默认输出到 `show_subsets/positive/`，文件名包含 step6 的稳定 `node_id`。缺图默认跳过。
 
-### 8. 浏览器人工审核
+### 8. 本地单人浏览器审核
 
 ```bash
-# 先完成 step7 可视化，再从 step6 输出构建审核条目与 CSV
+# 从 image_idx=0 开始；首次运行自动构建条目、启动 loopback 浏览器并打开审核页
+python step8_review_sheet.py
+
+# 从指定原始图片索引开始（image_idx 来自 step1 实例表）
+python step8_review_sheet.py --image-idx 120
+
+# 可选：只构建审核条目与 CSV，不启动界面
 python step8_review_sheet.py --build
-
-# 本地服务（只绑定 127.0.0.1；审核预览复用 step7 渲染器）
-python step8_review_sheet.py --serve --reviewer r1
-
-# 四人分片示例，START:END 是左闭右开
-python step8_review_sheet.py --serve --reviewer r1 --shard 0:3249
-python step8_review_sheet.py --serve --reviewer r2 --shard 3249:6498
 ```
 
-浏览器里用 `K` keep、`D` discard、`U` 全标 unknown、`M` 改显示词、空格下一条、
-`B` 上一条。每次决策立即追加到 `review/decisions_<reviewer>.jsonl`，中断可续审。
-审核预览与 step7 使用同一单子集布局及红叉/绿点标记，不再单独绘制 no/unknown 颜色。
-已有审核条目建议重新运行 `--build` 以保存精确的同根其余实例坐标；不改动 decisions 文件。
+界面一次展示一个子集，原图右侧使用大号粗体、不同强调色的信息卡展示**原始类别、原始 caption、新增划分属性**，
+并直接显示 yes/no/unknown 数量、框选点数和保留/废弃状态；完整 JSON 默认折叠在“查看技术详情”中。
+顶部同时显示 source `image_idx`、图片名和当前审核进度。`image_idx` 是 step1 按原始图片顺序从 0 开始编号的索引；如果指定索引没有子集，则从后续第一个有可审子集的图片开始。← / → 或
+A / D 切换上一/下一子集，不改变保留状态；空格显式废弃当前子集并前进。右侧状态横幅用黄色“未审核 · 默认保留”、绿色“已审核 · 保留”或红色“已审核 · 已废弃”区分审核进度和去留。没有废弃记录的子集
+默认保留。鼠标拖框结束后会立即将所选 yes/no 点各翻转一次，不需要额外点击；如果还要再次翻转，可点“手动翻转所选 yes/no”。快捷键 W 将框选点全部设为 yes，S 全部设为 no；两个操作也会把框选到的 unknown 设为指定标签。状态和点标签每次变更立即追加保存到
+`review/review_state.jsonl`，首次启动时该文件不存在也可正常审核，首次保存更改会自动创建；已有文件不会被清空，
+中断后再次运行会恢复审核状态。关闭进程时会导出最终数据，界面中的
+“保存最终子集”按钮也可随时导出；最终文件默认为 `anno/fine_grained_subsets_final.jsonl`，
+只排除显式废弃的子集，并将人工修改后的 yes/no/unknown 实例分区写回。
 
-多人结束后：
-
-```bash
-python step8_review_sheet.py --ingest \
-  review/decisions_r1.jsonl review/decisions_r2.jsonl \
-  --final-output anno/fine_grained_subsets_final.jsonl
-```
-
-冲突投票不会静默按 discard 处理，会标为 `disagreement`，并输出 pairwise Cohen's
-kappa。只有所有有记录的评审都 `keep` 才进入最终文件。
+服务只绑定 `127.0.0.1`，是单机单人界面；不提供 reviewer、分片或多人合并流程。可用
+`--instances`、`--image-dir`、`--review-dir`、`--state` 和 `--final-output` 覆盖输入输出路径。
 
 ## 重要边界
 

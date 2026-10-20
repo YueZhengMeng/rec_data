@@ -22,7 +22,7 @@ def _env(name: str, default: Any) -> Any:
     return default if value is None or value == "" else value
 
 
-_PROVIDER = "deepseek"
+_PROVIDER = "qwen"
 _PROVIDER_DEFAULTS = {
     "qwen": {
         "api_key_env": "DASHSCOPE_API_KEY",
@@ -77,7 +77,7 @@ CONFIG: dict[str, Any] = {
         "annotations": "anno/annotations.json",
         "splits": "anno/splits.json",
         # step1 产出：实例表
-        "instance_data": "anno/instance_data_mini.jsonl",
+        "instance_data": "anno/instance_data.jsonl",
         # step2 产出：标注词表；vocabulary 保持 step2/all 的既有默认
         "vocabulary": "anno/attribute_vocabulary_all.json",
         "vocabulary_train": "anno/attribute_vocabulary_train.json",
@@ -85,27 +85,27 @@ CONFIG: dict[str, Any] = {
         "vocabulary_md": "anno/attribute_vocabulary_all.md",
         "vocabulary_overrides": "anno/vocabulary_overrides_all.json",
         # step3 产出：开放提取结果，在线与本地各一份
-        "extract_result_online": "anno/extract_result_qwen.jsonl",
+        "extract_result_online": "anno/extract_result.jsonl",
         "extract_result_local": "anno/extract_result_local.jsonl",
-        "extract_sample_online": "anno/extract_sample_qwen.json",
+        "extract_sample_online": "anno/extract_sample.json",
         "extract_sample_local": "anno/extract_sample_local.json",
-        "extract_preview_online": "anno/extract_preview_qwen.json",
+        "extract_preview_online": "anno/extract_preview.json",
         "extract_preview_local": "anno/extract_preview_local.json",
-        # step4 产出：归一化候选
-        "predicate_candidates_online": "anno/predicate_candidates_qwen.json",
-        "predicate_candidates_local": "anno/predicate_candidates_local.json",
-        "generated_vocabulary_online": "anno/vocabulary_generated_qwen.json",
+        # step4 产出：归一化候选（一行一条，图片名与 caption 为记录字段）
+        "predicate_candidates_online": "anno/predicate_candidates.jsonl",
+        "predicate_candidates_local": "anno/predicate_candidates_local.jsonl",
+        "generated_vocabulary_online": "anno/vocabulary_generated.json",
         "generated_vocabulary_local": "anno/vocabulary_generated_local.json",
         # step5 产出：三值判断，以及探针剪掉的「根 × 恒定条件」
-        "predicate_labels_online": "anno/predicate_labels_qwen.jsonl",
+        "predicate_labels_online": "anno/predicate_labels.jsonl",
         "predicate_labels_local": "anno/predicate_labels_local.jsonl",
-        "predicate_constant_online": "anno/predicate_constant_qwen.json",
+        "predicate_constant_online": "anno/predicate_constant.json",
         "predicate_constant_local": "anno/predicate_constant_local.json",
         # step6 产出：门禁筛选后的子集
-        "subsets": "anno/fine_grained_subsets_qwen.jsonl",
-        "subset_decisions": "anno/subset_decisions_log_qwen.jsonl",
+        "subsets": "anno/fine_grained_subsets.jsonl",
+        "subset_decisions": "anno/subset_decisions_log.jsonl",
         # step7 产出：子集可视化
-        "output_dir": "show_subsets_qwen",
+        "output_dir": "show_subsets",
         # step8 产出：人工审核与最终子集
         "review_dir": "review",
         "subsets_final": "anno/fine_grained_subsets_final.jsonl",
@@ -113,12 +113,12 @@ CONFIG: dict[str, Any] = {
 
     # ---- 在线调用 ----
     "online": {
-        "concurrency": 1000,
+        "concurrency": 2000,
         "max_retries": 3,
-        "timeout": 1800.0,
+        "timeout": 300,
         # 默认关闭思考；需要时可用 --enable-thinking 显式开启。
         "enable_thinking": False,
-        "batch_size": 1000,
+        "batch_size": 2000,
         # Qwen 按官方视觉输入的模式默认值；DeepSeek 仅非思考模式显式传 temperature=1。
         "sampling": {
             "qwen": {
@@ -203,9 +203,9 @@ CONFIG: dict[str, Any] = {
         "embedding_device": None,
         "use_embedding": True,
         # 开放短语两两去重：比匹配闭集词表更保守，避免误删不同属性。
-        "dedup_similarity_threshold": 0.85,
+        "dedup_similarity_threshold": 0.90,
         # 去重后开放短语 → 闭集词表候选匹配。
-        "similarity_threshold": 0.75,
+        "similarity_threshold": 0.80,
         "similarity_margin": 0.02,
         # 仅用于提示同图其他 caption 的属性词与入选候选可能重复，不影响筛选。
         "cross_caption_duplicate_threshold": 0.85,
@@ -233,14 +233,14 @@ CONFIG: dict[str, Any] = {
     # ---- 子集门禁 ----
     "gates": {
         # G1：两侧都要够大，互补预测才良定义。
-        "min_support": 1,
-        "min_complement": 1,
-        # G2：判断不了的不进训练。
-        "max_unknown_ratio": 0,
+        "min_support": 2,
+        "min_complement": 2,
+        # G2：仅在 unknown 占父集比例超过上限时拒绝；unknown 不并入 yes/no。
+        "max_unknown_ratio": 0.90,
         # G4：同一根内支持集过于接近的谓词只留一个。
         "max_support_jaccard": 0.80,
         # G5：min(yes, no) / n 的下限，砍掉 90% yes 的伪条件。
-        "min_balance": 0.15,
+        "min_balance": 0.10,
         "max_predicates_per_root": 3,
         "max_depth": 1,
         # 是否为通过门禁的谓词生成否定侧兄弟子集。
@@ -249,7 +249,6 @@ CONFIG: dict[str, Any] = {
 
     # ---- 人工审核 ----
     "review": {
-        "default_reviewer": "r1",
         "host": "127.0.0.1",
         "port": 8765,
     },

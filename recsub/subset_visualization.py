@@ -127,7 +127,7 @@ def _draw_point(draw: ImageDraw.ImageDraw, point: Sequence[float], scale: float,
     x = origin[0] + float(point[0]) * scale
     y = origin[1] + float(point[1]) * scale
     draw.ellipse((x - radius, y - radius, x + radius, y + radius),
-                 fill=color, outline="white", width=max(1, radius // 3))
+                 fill=color, outline="white", width=max(2, radius // 2))
 
 
 def _draw_cross(draw: ImageDraw.ImageDraw, point: Sequence[float], scale: float,
@@ -137,22 +137,26 @@ def _draw_cross(draw: ImageDraw.ImageDraw, point: Sequence[float], scale: float,
     diagonals = ((x - radius, y - radius, x + radius, y + radius),
                  (x - radius, y + radius, x + radius, y - radius))
     # Paint both halo strokes first so the crossing stays red at its center.
-    for color, width in (("white", 5), (POSITIVE_MARKER, 3)):
+    for color, width in (("white", 8), (POSITIVE_MARKER, 4)):
         for line in diagonals:
             draw.line(line, fill=color, width=width)
 
 
 def _draw_field(draw: ImageDraw.ImageDraw, x: int, y: int, label: str, value: Any,
-                width: int) -> int:
-    label_font = font(12, True)
-    value_font = font(13)
-    draw.text((x, y), label, fill=SECONDARY, font=label_font)
-    y += 18
+                width: int, *, prominent: bool = False,
+                accent: tuple[int, int, int] | None = None) -> int:
+    label_size, value_size = (28, 34) if prominent else (24, 26)
+    label_font = font(label_size, True)
+    value_font = font(value_size, prominent)
+    color = accent or SECONDARY
+    draw.text((x, y), label, fill=color, font=label_font)
+    y += label_size + 7
     value_text = "—" if value is None or value == "" else str(value)
-    for line in wrap_text(draw, value_text, width, value_font)[:4]:
-        draw.text((x, y), line, fill=PRIMARY, font=value_font)
-        y += 18
-    return y + 8
+    line_height = value_size + 7
+    for line in wrap_text(draw, value_text, width, value_font):
+        draw.text((x, y), line, fill=accent or PRIMARY, font=value_font)
+        y += line_height
+    return y + 14
 
 
 def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: int = 1,
@@ -170,7 +174,36 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
     scale = min(max_width / source.width, max_height / source.height, 3.0)
     displayed = source.resize((max(1, round(source.width * scale)),
                                max(1, round(source.height * scale))), Image.Resampling.LANCZOS)
-    panel_h = max(displayed.height + PANEL_PADDING * 2, MIN_PANEL_HEIGHT)
+    predicate = node.get("predicate") or {}
+    other_points = node.get("other_points")
+    if other_points is None:
+        other_points = [*node.get("no_points", ()), *node.get("unknown_points", ())]
+    dimension_value = " / ".join(str(value) for value in (predicate.get("dimension"), predicate.get("value")) if value)
+    raw = "、".join(str(value) for value in (predicate.get("raw_phrases") or ()))
+    fields = [
+        ("原始类别", node.get("category"), True, (25, 78, 150)),
+        ("原始 caption", node.get("caption"), True, (135, 48, 92)),
+        ("新增划分属性", predicate.get("display") or predicate.get("predicate_id"), True, (0, 112, 84)),
+        ("属性维度 / 取值", dimension_value, False, None),
+        ("来源 / 原始短语", f"{predicate.get('source') or '—'} / {raw or '—'}", False, None),
+        ("子集正样本数（红叉）", len(node.get("instance_ids", node.get("yes_ids", ()))), False, None),
+        ("同根其余实例数（绿点）", len(other_points), False, None),
+    ]
+    if mode == "review":
+        review = node.get("review") or {}
+        fields.append(("审核状态", review.get("status", "pending"), False, None))
+    sidebar_text_width = sidebar_width - 32
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    estimated_text_height = sum(
+        ((28 if prominent else 24) + 7)
+        + max(1, len(wrap_text(measure, "—" if value is None or value == "" else str(value),
+                               sidebar_text_width, font(34 if prominent else 26, prominent))))
+          * ((34 if prominent else 26) + 7)
+        + 14
+        for _, value, prominent, _ in fields
+    )
+    panel_h = max(displayed.height + PANEL_PADDING * 2,
+                  estimated_text_height + PANEL_PADDING * 2 + 14, MIN_PANEL_HEIGHT)
     canvas_h = TITLE_HEIGHT + MARGIN * 2 + panel_h
     canvas = Image.new("RGB", (MARGIN * 2 + displayed.width + PANEL_GAP + sidebar_width, canvas_h),
                        PAGE_BACKGROUND)
@@ -187,9 +220,6 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
                     origin[0] + displayed.width, origin[1] + displayed.height), outline=BORDER)
     # Older review_items.jsonl stored only the complete no/unknown partitions.
     # New items use the exact root-minus-subset coordinates supplied by the loader.
-    other_points = node.get("other_points")
-    if other_points is None:
-        other_points = [*node.get("no_points", ()), *node.get("unknown_points", ())]
     for point in other_points:
         _draw_point(draw, point, scale, OTHER_MARKER, 5, origin)
     for point in node.get("yes_points", ()):
@@ -199,24 +229,10 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
     draw.rounded_rectangle((sidebar_x, top, sidebar_x + sidebar_width, top + panel_h),
                            radius=10, fill=SIDEBAR_BACKGROUND, outline=BORDER, width=2)
     text_x = sidebar_x + 16
-    text_width = sidebar_width - 32
-    predicate = node.get("predicate") or {}
     cursor = top + 14
-    cursor = _draw_field(draw, text_x, cursor, "原始类别", node.get("category"), text_width)
-    cursor = _draw_field(draw, text_x, cursor, "原始 caption", node.get("caption"), text_width)
-    cursor = _draw_field(draw, text_x, cursor, "新增划分属性",
-                         predicate.get("display") or predicate.get("predicate_id"), text_width)
-    dimension_value = " / ".join(str(value) for value in (predicate.get("dimension"), predicate.get("value")) if value)
-    cursor = _draw_field(draw, text_x, cursor, "属性维度 / 取值", dimension_value, text_width)
-    raw = "、".join(str(value) for value in (predicate.get("raw_phrases") or ()))
-    cursor = _draw_field(draw, text_x, cursor, "来源 / 原始短语",
-                         f"{predicate.get('source') or '—'} / {raw or '—'}", text_width)
-    cursor = _draw_field(draw, text_x, cursor, "子集正样本数（红叉）",
-                         len(node.get("instance_ids", node.get("yes_ids", ()))), text_width)
-    cursor = _draw_field(draw, text_x, cursor, "同根其余实例数（绿点）", len(other_points), text_width)
-    if mode == "review":
-        review = node.get("review") or {}
-        _draw_field(draw, text_x, cursor, "审核状态", review.get("status", "pending"), text_width)
+    for label, value, prominent, accent in fields:
+        cursor = _draw_field(draw, text_x, cursor, label, value, sidebar_text_width,
+                             prominent=prominent, accent=accent)
     return canvas
 
 

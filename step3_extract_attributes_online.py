@@ -22,6 +22,7 @@ from recsub.extract import (
 )
 from recsub.io import close_all, get_writer, iter_jsonl, write_json_atomic
 from recsub.llm_api import OnlineModel, build_cropper, load_three_views
+from recsub.online_batch import run_online_batch
 from recsub.prompts import (
     EXTRACT_ATTRIBUTES_PROMPT, build_extract_attributes_prompt, )
 from recsub.prompts import build_instance_messages
@@ -94,6 +95,8 @@ async def run(args: argparse.Namespace) -> int:
     preview: dict[str, Any] = {}
     succeeded = failed = input_tokens = output_tokens = 0
     processed = 0
+    batch_number = 0
+    total_batches = (len(selected) + args.batch_size - 1) // args.batch_size
 
     async def handle(instance: Mapping[str, Any]) -> None:
         nonlocal succeeded, failed, input_tokens, output_tokens
@@ -122,12 +125,16 @@ async def run(args: argparse.Namespace) -> int:
             pending.append(instance)
             if len(pending) < args.batch_size:
                 continue
-            await asyncio.gather(*(handle(item) for item in pending))
+            batch_number += 1
+            await run_online_batch(pending, handle,
+                                   desc=f"step3 batch {batch_number}/{total_batches}")
             processed += len(pending)
             pending = []
             print(f"  进度 {processed}/{len(selected)}  成功 {succeeded} 失败 {failed}")
         if pending:
-            await asyncio.gather(*(handle(item) for item in pending))
+            batch_number += 1
+            await run_online_batch(pending, handle,
+                                   desc=f"step3 batch {batch_number}/{total_batches}")
             processed += len(pending)
     finally:
         close_all()

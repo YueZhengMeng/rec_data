@@ -1,9 +1,7 @@
 .idea
 __pycache__
-anno
-exp
 old
 .claude
-show_subsets_local
-show_subsets_qwen
-show_subsets_deepseek
+temp
+tests
+review

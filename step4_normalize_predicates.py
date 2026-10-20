@@ -29,7 +29,7 @@ from recsub.config import CONFIG, path
 from recsub.console import configure_console
 from recsub.embedding import Qwen3EmbeddingEncoder
 from recsub.instances import enrich_with_instances, load_parents
-from recsub.io import iter_jsonl, load_json_any, write_json_atomic
+from recsub.io import iter_jsonl, load_json_any, write_jsonl_atomic
 from recsub.llm_api import OnlineModel
 from recsub.normalize import (
     CANDIDATE_TIERS,
@@ -147,7 +147,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--splits", type=Path, default=path("splits"),
                         help="数据划分 splits.json，按 (图片名, caption) 路由词表")
     parser.add_argument("--output", type=Path, default=path("predicate_candidates_online"),
-                        help="归一化候选输出（图片 → caption → 候选谓词）")
+                        help="归一化候选输出（JSONL，一行一个 caption 的候选谓词）")
     parser.add_argument("--generated-vocabulary", type=Path,
                         default=path("generated_vocabulary_online"),
                         help="LLM 尾部新生成的谓词，单独存一份用于消融")
@@ -480,7 +480,11 @@ async def run(args: argparse.Namespace) -> int:
             selected_new_ids.update(candidate.predicate_id for candidate in result.candidates
                                     if candidate.source == "generated")
             payload.setdefault(result.image_name, {})[result.caption] = compact_root(result)
-    write_json_atomic(args.output, payload, indent=4)
+    write_jsonl_atomic(args.output, (
+        {"image_name": image_name, "caption": caption, **entry}
+        for image_name, captions in payload.items()
+        for caption, entry in captions.items()
+    ))
 
     selected_new = [entry for entry in new_entries if entry.predicate_id in selected_new_ids]
     Vocabulary(entries=selected_new, metadata={

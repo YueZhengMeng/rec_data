@@ -154,7 +154,8 @@ def judge_local_batch(items: Sequence[Mapping[str, Any]], phrases_by_root: Mappi
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="逐实例闭集三值判断（本地 Qwen）")
     parser.add_argument("--instances", type=Path, default=path("instance_data"))
-    parser.add_argument("--candidates", type=Path, default=path("predicate_candidates"))
+    parser.add_argument("--candidates", type=Path, default=path("predicate_candidates_local"),
+                        help="归一化候选（step4 产出的 JSONL）")
     parser.add_argument("--image-dir", default=CONFIG["image_dir"])
     parser.add_argument("--output", type=Path, default=path("predicate_labels_local"))
     parser.add_argument("--check-fingerprint", action=argparse.BooleanOptionalAction,
