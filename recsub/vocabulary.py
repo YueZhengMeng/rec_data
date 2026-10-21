@@ -11,7 +11,8 @@ orientation 11 / age 3 / gender 2 撑起绝大部分实例量，car 全部维度
 
 关键设计
 --------
-- **默认只用 train 划分构建**，避免 val/test 的标注词进入提示词。
+- **划分可隔离**。step2 可用 ``--split train`` 只统计训练根，避免 val/test 的
+  标注词进入训练侧词表；step4 对 train 根使用该词表，对 val/test 根使用全量词表。
 - 归一化结果按 ``Slot``（类别, 维度, 取值, 施动者动词, 极性）三元组合并，
   而不是按字符串。因此 ``holding an umbrella`` 与 ``holding a umbrella``
   会合并，而 ``walking to the left``（行人的运动方向）与 ``facing left``
@@ -19,7 +20,7 @@ orientation 11 / age 3 / gender 2 撑起绝大部分实例量，car 全部维度
 - ``scope`` 只作为**标记**，不删除条目：``in the first left queue`` 这类
   场景相对取值绑在单张图的布局上，step4 不会把它当作「同类不相似」的补充候选；
   但它仍然保留在词表里，便于统计与人工判断。
-- 人工可以用 ``vocabulary_overrides.json`` 改名、合并、删除、加别名，
+- 人工可以用 ``vocabulary_overrides*.json`` 改名、合并、删除、加别名，
   不必改代码。
 """
 
@@ -29,7 +30,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from recsub.io import load_json_any, write_json_atomic
 
@@ -39,15 +40,13 @@ DIMENSIONS: tuple[str, ...] = (
     "location", "clothing", "accessory", "material", "variety", "size",
 )
 FALLBACK_DIMENSION = "other"
-POLARITIES: tuple[str, ...] = ("positive", "negative")
-SCOPES: tuple[str, ...] = ("absolute", "scene_relative")
 
 # ============================================================
 # 一、取值规则：把原始标注串拆成 (施动者动词, 取值)
 # ============================================================
 # 这些规则的作用是让同一意思的不同写法落到同一个 Slot 上。规则刻意保持保守：
-# 只处理实测到的、语义无歧义的模式，其余原样保留，交给 embedding 与 LLM 尾部
-# 去处理，避免规则误合并。
+# 只处理实测到的、语义无歧义的模式，其余原样保留，交给 embedding 相似度匹配
+# 处理，避免规则误合并。
 # 冠词可选：数据里 'wearing a green shirt' 与 'wearing green shirt' 并存，
 # 若强制要求冠词，后者抽不出动词，display 会变成 'wearing wearing green shirt'。
 _VERB_OBJECT_RE = re.compile(r"^(holding|carrying|wearing)\s+(?:(?:an?|the)\s+)?(.+)$")
@@ -77,7 +76,7 @@ _ORIENTATION_PHRASE_RE = re.compile(r"^in (horizontal|vertical) orientation$")
 _CLOTHING_PREPOSITION_RE = re.compile(r"^(?:in|on)\s+(?:(?:an?|the)\s+)?(.+)$")
 
 # 只在两种写法确定同指、且原数据确实并存时才合并，避免我自己发明语义判断。
-# 真正的语义合并留给 vocabulary_overrides.json，由人工决定。
+# 真正的语义合并留给 vocabulary_overrides*.json，由人工决定。
 _ALIAS_RULES: dict[str, str] = {
     # 'in queue' / 'in a queue' / 'in the queue' 三写法在原数据里并存。
     "in queue": "in the queue",
@@ -386,7 +385,7 @@ def build_vocabulary(
 # ============================================================
 def apply_overrides(entries: Sequence[Predicate],
                     overrides: Mapping[str, Any] | None) -> tuple[list[Predicate], dict[str, int]]:
-    """应用 ``vocabulary_overrides.json``：改名 → 合并 → 删别名 → 删除。
+    """应用 ``vocabulary_overrides*.json``：改名 → 合并 → 删别名 → 删除。
 
     顺序固定，因为合并会消耗掉被合并方，改名会改变 id。
     """
@@ -506,7 +505,7 @@ class Vocabulary:
         """把一段候选文本匹配到词表槽位。
 
         返回 ``(predicate_id, method)``，method ∈ exact / rule / value；
-        都匹配不上时返回 ``(None, None)``，交给 embedding 与 LLM 尾部处理。
+        都匹配不上时返回 ``(None, None)``，交给 embedding 相似度匹配处理。
         """
         key = slug_category(category)
         normalized = normalize_surface(text)
@@ -561,17 +560,6 @@ class Vocabulary:
         if not isinstance(payload, Mapping) or "entries" not in payload:
             raise ValueError(f"{path} 不是词表文件（缺少 entries）")
         return cls.from_dict(payload)
-
-    def add_generated(self, entries: Iterable[Predicate], *,
-                      metadata: Mapping[str, Any] | None = None) -> "Vocabulary":
-        """追加 step4 生成的新谓词，返回新词表（不改动原对象）。"""
-        merged = {entry.predicate_id: entry for entry in self.entries}
-        for entry in entries:
-            merged.setdefault(entry.predicate_id, entry)
-        combined = sorted(merged.values(), key=lambda item: (
-            item.category, item.dimension, item.value, item.verb or "", item.polarity
-        ))
-        return Vocabulary(entries=combined, metadata={**self.metadata, **dict(metadata or {})})
 
     # ---- 人工浏览 ----
     def to_markdown(self) -> str:

@@ -63,10 +63,6 @@ class Counts:
     unknown: int
 
     @property
-    def judged(self) -> int:
-        return self.yes + self.no + self.unknown
-
-    @property
     def balance(self) -> float:
         """``min(yes, no) / parent``：越接近 0.5 越有区分力。"""
         return 0.0 if not self.parent else min(self.yes, self.no) / self.parent

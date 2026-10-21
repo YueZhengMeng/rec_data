@@ -231,9 +231,6 @@ class AdaptiveCropper:
             self,
             density_index: Mapping[GroupKey, Mapping[Point, _DensityEstimate]],
             config: CropConfig | None = None,
-            *,
-            instance_point_count: int = 0,
-            duplicate_point_count: int = 0,
     ) -> None:
         self.config = config or CropConfig()
         # 用 MappingProxyType 包装索引，防止并发任务意外修改密度数据。
@@ -243,28 +240,7 @@ class AdaptiveCropper:
                 for key, group_estimates in density_index.items()
             }
         )
-        self.instance_point_count = instance_point_count
         self.unique_point_count = sum(len(group) for group in self._density_index.values())
-        self.duplicate_point_count = duplicate_point_count
-
-    @classmethod
-    def from_annotations(
-            cls,
-            annotations: Mapping[str, Mapping[str, Mapping[str, Any]]],
-            config: CropConfig | None = None,
-    ) -> AdaptiveCropper:
-        """Build an index directly from the nested annotations.json schema."""
-        instances = (
-            {
-                "image_name": image_name,
-                "category": record.get("class"),
-                "point": point,
-            }
-            for image_name, image_annotations in annotations.items()
-            for record in image_annotations.values()
-            for point in record.get("points", ())
-        )
-        return cls.from_instances(instances, config)
 
     @classmethod
     def from_instances(
@@ -275,8 +251,6 @@ class AdaptiveCropper:
         """Build a read-only same-image, same-category density index once."""
         resolved_config = config or CropConfig()
         point_groups: dict[GroupKey, set[Point]] = defaultdict(set)
-        instance_point_count = 0
-        duplicate_point_count = 0
 
         for index, instance in enumerate(instances):
             try:
@@ -292,13 +266,8 @@ class AdaptiveCropper:
                 raise ValueError(f"invalid category at instance index {index}")
 
             point = _coerce_point(raw_point, f"instance point at index {index}")
-            group = point_groups[(image_name, category)]
-            instance_point_count += 1
-            # 重复点仍计入原始实例统计，但从唯一点集合排除，避免零距离污染 kNN。
-            if point in group:
-                duplicate_point_count += 1
-            else:
-                group.add(point)
+            # 重复点从唯一点集合排除，避免零距离污染 kNN。
+            point_groups[(image_name, category)].add(point)
 
         # 预计算所有唯一点的近邻统计，将昂贵计算从每次请求移到初始化阶段。
         density_index: dict[GroupKey, dict[Point, _DensityEstimate]] = {}
@@ -306,12 +275,7 @@ class AdaptiveCropper:
             points = tuple(sorted(point_set))
             density_index[key] = _estimate_group_density(points, resolved_config)
 
-        return cls(
-            density_index,
-            resolved_config,
-            instance_point_count=instance_point_count,
-            duplicate_point_count=duplicate_point_count,
-        )
+        return cls(density_index, resolved_config)
 
     @property
     def group_count(self) -> int:
@@ -630,7 +594,7 @@ def _draw_outline_marker(
     draw = ImageDraw.Draw(overlay)
 
     shorter_side = min(marked_image.size)
-    # 全图视图沿用较大的半径，局部视图用收得更紧的 outline 半径。
+    # 全图视图使用较大的半径，局部视图用收得更紧的 outline 半径。
     if radius_ratio is None:
         radius_ratio = config.outline_radius_ratio
     if radius_min is None:

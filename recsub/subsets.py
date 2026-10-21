@@ -57,15 +57,15 @@ def stable_id(prefix: str, *parts: Any) -> str:
     return prefix + hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def build_decisions(records: Sequence[Mapping[str, Any]], predicates: Sequence[Mapping[str, Any]],
-                    ids_by_display: Mapping[str, list[str]] | None = None) -> list[PredicateDecision]:
+def build_decisions(records: Sequence[Mapping[str, Any]],
+                    predicates: Sequence[Mapping[str, Any]]) -> list[PredicateDecision]:
     """把逐实例的 ``predicate_id → label`` 读成按谓词聚合的分区。"""
     parent_ids = frozenset(int(record["instance_id"]) for record in records)
     by_id: dict[str, dict[str, set[int]]] = {
         str(predicate["predicate_id"]): {"yes": set(), "no": set(), "unknown": set()}
         for predicate in predicates
     }
-    # step5 的标签以 predicate_id 为键，所以不需要候选输出里的显示→id 反向映射。
+    # step5 的标签以 predicate_id 为键，直接按谓词聚合。
     for record in records:
         labels = record.get("labels")
         if not isinstance(labels, Mapping):

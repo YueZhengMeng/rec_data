@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -48,7 +48,7 @@ def completed_judgments(
 
 
 def iter_candidate_entries(candidates_path: Path):
-    """产出 ``(图片, caption, 记录)``；``.jsonl`` 为新格式，其余按旧嵌套 JSON 读。"""
+    """产出 ``(图片, caption, 记录)``；``.jsonl`` 一行一条，其余按嵌套 JSON 读。"""
     candidates_path = Path(candidates_path)
     if candidates_path.suffix.lower() == ".jsonl":
         for record in iter_jsonl(candidates_path):
@@ -78,8 +78,8 @@ def iter_candidate_entries(candidates_path: Path):
 def load_caption_predicates(candidates_path: Path) -> tuple[dict, dict, dict]:
     """读候选并整理成「根 → 谓词 / 问句 / 问句→ID」。
 
-    候选文件按后缀区分：``.jsonl`` 是 step4 现在的一行一条格式，``.json`` 是
-    图片 → caption 的旧嵌套格式，两种都能直接读。
+    候选文件按后缀区分：``.jsonl`` 是 step4 的一行一条格式，``.json`` 是
+    图片 → caption 的嵌套格式，两种都能直接读。
     """
     by_root: dict[tuple[str, str], list[dict]] = {}
     phrases_by_root: dict[tuple[str, str], tuple[str, ...]] = {}
@@ -146,13 +146,6 @@ def build_work(instances: Iterable[Mapping[str, Any]], phrases_by_root, complete
     return dict(work)
 
 
-def restrict_labels(record: Mapping[str, Any], keep: Sequence[str]) -> dict:
-    labels = record.get("labels")
-    if not isinstance(labels, Mapping):
-        return dict(record)
-    return {**record, "labels": {phrase: labels[phrase] for phrase in keep if phrase in labels}}
-
-
 def expand_labels(record: Mapping[str, Any], ids_by_display: Mapping[str, list[str]]) -> dict:
     labels = record.get("labels")
     if not isinstance(labels, Mapping):
@@ -162,26 +155,3 @@ def expand_labels(record: Mapping[str, Any], ids_by_display: Mapping[str, list[s
         for predicate_id in ids_by_display.get(display, ()):
             expanded[predicate_id] = label
     return {**record, "labels": expanded}
-
-
-def ratio_prune(records: Iterable[Mapping[str, Any]], phrases: Sequence[str],
-                yes_ratio: float, no_ratio: float, min_instances: int) -> tuple[list[str], list[str]]:
-    """从探针标签中挑出几乎恒定的问句；返回 (保留, 剪掉)。"""
-    tally = {phrase: Counter() for phrase in phrases}
-    for record in records:
-        labels = record.get("labels")
-        if not isinstance(labels, Mapping):
-            continue
-        for phrase in phrases:
-            label = labels.get(phrase)
-            if label in LABELS:
-                tally[phrase][label] += 1
-    kept, pruned = [], []
-    for phrase in phrases:
-        counted = sum(tally[phrase][label] for label in LABELS)
-        if counted < min_instances:
-            kept.append(phrase)
-            continue
-        yes_share = tally[phrase]["yes"] / counted
-        (pruned if yes_share >= yes_ratio or yes_share <= no_ratio else kept).append(phrase)
-    return kept, pruned

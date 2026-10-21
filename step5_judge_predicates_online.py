@@ -5,14 +5,11 @@
 2. **用规范写法发问**。同一个谓词在所有实例上问法一致（如 ``wearing helmet``
    而不是各实例自己的措辞），标签才可比。否定谓词带上 ``not``。
 3. **输出 JSONL 追加写**，可中断续跑；运行指纹写在旁挂标记文件里。
-4. **两个成本杠杆**：``--no-enable-thinking`` 关掉思维链（判断的 output token 由
-   思维链主导，实测均值 3187）；``--probe-per-caption`` 先判每个根的一小部分实例，把
-   几乎恒定的条件从这个根上剪掉，再判其余实例。探针轮的标签不会被浪费——对存活
-   下来的条件，那些标签本来就算数，过滤后保留，于是同一个根内所有实例的问句集合
-   保持一致。
+4. **成本杠杆**：``--no-enable-thinking`` 关掉思维链（判断的 output token 由
+   思维链主导，实测均值 3187）。
 
     python step5_judge_predicates_online.py --image-names 0002-fsc147-1386.jpg
-    python step5_judge_predicates_online.py --probe-per-caption 6 --no-enable-thinking
+    python step5_judge_predicates_online.py --no-enable-thinking
 """
 
 from __future__ import annotations
@@ -20,7 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
@@ -32,11 +29,10 @@ from recsub.io import (
     close_all,
     get_writer,
     iter_jsonl,
-    write_json_atomic,
 )
 from recsub.judgment import (
     build_work, completed_judgments, expand_labels, load_caption_predicates,
-    parse_labels, ratio_prune, restrict_labels,
+    parse_labels,
 )
 from recsub.llm_api import OnlineModel, build_cropper, load_three_views
 from recsub.online_batch import run_online_batch
@@ -59,10 +55,6 @@ def judgment_fingerprint(args: argparse.Namespace) -> str:
         "sampling": online_sampling(
             enable_thinking=args.enable_thinking, presence_penalty=PRESENCE_PENALTY,
         ),
-        "probe_per_caption": args.probe_per_caption,
-        "probe_min_instances": args.probe_min_instances,
-        "constant_yes_ratio": args.constant_yes_ratio,
-        "constant_no_ratio": args.constant_no_ratio,
         "crop": asdict(crop_config()),
         "prompt": PREDICATE_JUDGMENT_PROMPT,
     })
@@ -110,11 +102,9 @@ async def run(args: argparse.Namespace) -> int:
     print(f"✅ 候选根 {len(by_root)} 个，其中 {with_predicates} 个有候选谓词")
 
     fingerprint = judgment_fingerprint(args)
-    completed, prior_rows = completed_judgments(
+    completed, _ = completed_judgments(
         args.output, fingerprint, check_fingerprint=args.check_fingerprint,
     )
-    if prior_rows and args.probe_per_caption > 0:
-        raise ValueError("探针模式在部分写入后不能安全重算剪枝；请指定新的 --output")
     if completed:
         print(f"发现已有结果：跳过 {len(completed)} 个已判断实例")
 
@@ -157,8 +147,7 @@ async def run(args: argparse.Namespace) -> int:
             print(f"  进度 {counters['written']}/{total_instances}  "
                   f"已判 {counters['judged']} 失败 {counters['failed']}")
 
-    async def dispatch(items: Sequence[dict], phrases_for: Mapping, sink: Sink,
-                       *, phase: str = "判断") -> None:
+    async def dispatch(items: Sequence[dict], phrases_for: Mapping, sink: Sink) -> None:
         """按批并发判断，结果返回后立即交给 sink，不等待其他请求。"""
         batch_size = max(1, args.batch_size)
         total_batches = (len(items) + batch_size - 1) // batch_size
@@ -173,63 +162,13 @@ async def run(args: argparse.Namespace) -> int:
         for batch_number, start in enumerate(range(0, len(items), batch_size), 1):
             batch = items[start:start + batch_size]
             await run_online_batch(batch, handle,
-                                   desc=f"step5 {phase} batch {batch_number}/{total_batches}")
-
-    active_phrases: dict = dict(phrases_by_root)
-    constant_pairs: dict[str, list[str]] = {}
+                                   desc=f"step5 batch {batch_number}/{total_batches}")
 
     try:
-        if args.probe_per_caption > 0:
-            probe_items = [item for items in work.values() for item in items[:args.probe_per_caption]]
-            collected: dict[tuple[str, str], list[dict]] = defaultdict(list)
-
-            async def collect(record: dict) -> None:
-                if not record.get("judgment_failed"):
-                    collected[(record["image_name"], record["caption"])].append(record)
-
-            print(f"⏳ 探针轮：{len(probe_items)} 个实例")
-            await dispatch(probe_items, active_phrases, collect, phase="探针")
-
-            pool = Counter()
-            for key, phrases in phrases_by_root.items():
-                kept, pruned = ratio_prune(
-                    collected.get(key, ()), phrases,
-                    args.constant_yes_ratio, args.constant_no_ratio, args.probe_min_instances,
-                )
-                active_phrases[key] = tuple(kept)
-                if pruned:
-                    constant_pairs[f"{key[0]}\t{key[1]}"] = list(pruned)
-                    pool.update(pruned)
-            print(f"✅ 探针剪掉 {sum(len(v) for v in constant_pairs.values())} 个「根×条件」"
-                  f"（几乎恒定，无法划分父集）")
-            if pool:
-                print(f"   被剪最多的条件：{dict(pool.most_common(8))}")
-
-            # 探针轮的标签在存活条件上仍然有效，过滤后保留，不重问。
-            for key, records in collected.items():
-                survivors = active_phrases.get(key, ())
-                for record in records:
-                    await write_record(restrict_labels(record, survivors))
-            # 探针失败的实例仍在 remaining 中，按剪枝后的条件重试。
-            judged_ids = {record["instance_id"] for records in collected.values() for record in records}
-            remaining = [item for items in work.values() for item in items
-                         if item["instance_id"] not in judged_ids]
-            print(f"⏳ 剩余 {len(remaining)} 个实例按剪枝后的条件判断")
-            await dispatch(remaining, active_phrases, write_record)
-        else:
-            await dispatch([item for items in work.values() for item in items],
-                           active_phrases, write_record)
+        await dispatch([item for items in work.values() for item in items],
+                       phrases_by_root, write_record)
     finally:
         close_all()
-
-    if constant_pairs:
-        write_json_atomic(args.constant_output, {
-            "yes_ratio_threshold": args.constant_yes_ratio,
-            "no_ratio_threshold": args.constant_no_ratio,
-            "probe_per_caption": args.probe_per_caption,
-            "pairs": constant_pairs,
-        })
-        print(f"✅ 恒定条件记录 → {args.constant_output}")
 
     print(f"\n✅ 判断完成：已判 {counters['judged']}，失败 {counters['failed']}")
     print(f"   标签分布：yes={counters['yes']} no={counters['no']} unknown={counters['unknown']}")
@@ -253,8 +192,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--check-fingerprint", action=argparse.BooleanOptionalAction,
                         default=CONFIG["resume"]["check_fingerprint"],
                         help="校验输出旁挂的运行指纹；关闭后不会读取既有标记")
-    parser.add_argument("--constant-output", type=Path, default=path("predicate_constant_online"),
-                        help="探针剪掉的「根×恒定条件」记录")
     parser.add_argument("--image-names", default=None)
     parser.add_argument("--batch-size", type=int, default=CONFIG["online"]["batch_size"])
     parser.add_argument("--concurrency", type=int, default=CONFIG["online"]["concurrency"])
@@ -263,16 +200,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         default=CONFIG["online"]["enable_thinking"],
                         help="是否启用思维链；判断的 output token 由思维链主导，"
                              "--no-enable-thinking 值得实测")
-    parser.add_argument("--probe-per-caption", type=int,
-                        default=CONFIG["judge"]["probe_per_caption"],
-                        help="探针轮每根先判这么多实例以剪掉恒定条件；0 表示全量判断")
-    parser.add_argument("--probe-min-instances", type=int,
-                        default=CONFIG["judge"]["probe_min_instances"],
-                        help="探针至少要判这么多实例才敢剪枝，样本不足时宁可多花 token")
-    parser.add_argument("--constant-yes-ratio", type=float,
-                        default=CONFIG["judge"]["constant_yes_ratio"])
-    parser.add_argument("--constant-no-ratio", type=float,
-                        default=CONFIG["judge"]["constant_no_ratio"])
     return parser.parse_args(argv)
 
 

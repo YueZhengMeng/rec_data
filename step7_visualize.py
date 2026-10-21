@@ -1,8 +1,7 @@
 """step7：可视化 step6 选出的细粒度正向子集。
 
 每张 PNG 展示一个子集：红叉标记正样本，绿点标记同根 caption 其余实例。
-互补节点不单独生成图片。渲染器由
-:mod:`recsub.subset_visualization` 提供，step8 审核界面复用同一套布局。
+互补节点不单独生成图片。渲染器由 :mod:`recsub.subset_visualization` 提供。
 """
 
 from __future__ import annotations
@@ -18,18 +17,8 @@ from recsub.console import configure_console
 from recsub.subset_visualization import load_subset_nodes, render_subset
 
 
-def render_page(image: Image.Image, image_name: str, caption: str,
-                node: dict, *, subset_index: int = 1, page: int | None = None,
-                max_width: int = 1100, max_height: int = 850,
-                sidebar_width: int = 520) -> Image.Image:
-    """Backward-compatible name for the shared one-subset renderer."""
-    return render_subset(image, node, subset_index=page or subset_index, mode="positive",
-                         max_width=max_width, max_height=max_height,
-                         sidebar_width=sidebar_width)
-
-
 def run(args: argparse.Namespace) -> int:
-    nodes = load_subset_nodes(args.annotations, positive_only=True)
+    nodes = load_subset_nodes(args.annotations)
     if args.image_names:
         allowed = {name.strip() for name in args.image_names.split(",") if name.strip()}
         nodes = [node for node in nodes if node["image_name"] in allowed]
@@ -51,7 +40,7 @@ def run(args: argparse.Namespace) -> int:
         key = (image_name, caption)
         grouped_index[key] = grouped_index.get(key, 0) + 1
         with Image.open(image_path) as source:
-            figure = render_subset(source, node, subset_index=grouped_index[key], mode="positive",
+            figure = render_subset(source, node, subset_index=grouped_index[key],
                                    max_width=args.max_width, max_height=args.max_height,
                                    sidebar_width=args.sidebar_width)
         destination = args.output_dir / f"{Path(image_name).stem}__{node['node_id']}.png"

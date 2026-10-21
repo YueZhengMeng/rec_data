@@ -6,9 +6,9 @@
 「读回整个文件 → 追加 → 整体写回」，IO 在 28.6 万条上是 O(n²)，会先于 API 成为
 瓶颈；追加一行 JSONL 只写一行，且天然支持中断续跑。
 
-:func:`load_json_any` / :func:`iter_json_any` 按后缀自动选择读取器，``.json``
-产物不转换也能直接读；``python -m recsub.io migrate`` 则把记录数组形式的 JSON
-转成 JSONL（流式解析，写出前校验条数）。
+:func:`load_json_any` 按后缀自动选择读取器，``.json`` 产物不转换也能直接读；
+``python -m recsub.io migrate`` 则把记录数组形式的 JSON 转成 JSONL（流式解析，
+写出前校验条数）。
 
 断续跑所需的运行指纹不写在每一条记录里，而是旁挂一个 ``.run.json`` 标记文件，
 见 :func:`run_marker_path`。
@@ -70,32 +70,6 @@ def count_jsonl(path: str | Path) -> int:
     return total
 
 
-def done_ids(path: str | Path, key: str = "instance_id",
-             *, exclude_flag: str | None = None) -> set:
-    """已在 JSONL 中出现的某个标量字段取值集合，用于断点续跑。
-
-    ``exclude_flag`` 用来把「调用失败」的记录排除在已完成集合之外——失败记录
-    仍然落盘（便于统计失败率），但下次运行必须重试它们，不能当成已完成。
-    """
-    if not Path(path).exists():
-        return set()
-    return {
-        row[key] for row in iter_jsonl(path, strict=False)
-        if key in row and not (exclude_flag and row.get(exclude_flag))
-    }
-
-
-def done_keys(path: str | Path, keys: Sequence[str]) -> set[tuple]:
-    """已在 JSONL 中出现的复合键集合（例如 (image_name, caption)）。"""
-    if not Path(path).exists():
-        return set()
-    return {
-        tuple(row[key] for key in keys)
-        for row in iter_jsonl(path, strict=False)
-        if all(key in row for key in keys)
-    }
-
-
 def load_json_any(path: str | Path) -> Any:
     """按后缀自动选择 JSON 或 JSONL 读取器，``.json`` 产物不用转换即可使用。"""
     path = Path(path)
@@ -103,21 +77,6 @@ def load_json_any(path: str | Path) -> Any:
         return load_jsonl(path)
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
-
-
-def iter_json_any(path: str | Path) -> Iterator[dict]:
-    """``load_json_any`` 的迭代版本；``.jsonl`` 真流式，``.json`` 一次性载入。"""
-    path = Path(path)
-    if path.suffix.lower() == ".jsonl":
-        yield from iter_jsonl(path)
-        return
-    data = load_json_any(path)
-    if isinstance(data, dict):
-        # 逐图嵌套的 .json（图片名 -> caption -> 记录）摊平成迭代。
-        for key, value in data.items():
-            yield {"__key__": key, "__value__": value}
-        return
-    yield from data
 
 
 def _iter_json_array_stream(handle, *, label: str = "<stream>") -> Iterator[Any]:
@@ -193,8 +152,8 @@ def iter_json_records(path: str | Path) -> Iterator[Any]:
 
     * 一行一条的 JSONL；
     * 顶层记录数组 ``[{...}, {...}]``（``migrate_json_to_jsonl`` 的输入）；
-    * 缩进 JSON 记录首尾相接的「JSON 流」——部分在线步骤曾把每一条记录
-      ``indent=2`` 后直接续写，文件后缀仍是 ``.jsonl``，逐行解析会立刻失败。
+    * 缩进 JSON 记录首尾相接的「JSON 流」——每条记录 ``indent=2`` 后直接续写，
+      文件后缀仍可能是 ``.jsonl``，逐行解析会失败。
 
     源文件 251MB 也不会整体载入：维持滑动缓冲区，每解析出一条记录就丢弃
     已消费的前缀。记录之间允许空白（数组内额外允许逗号）。
@@ -445,14 +404,6 @@ class JsonlWriter:
         async with self._lock:
             await asyncio.to_thread(self._write_line, line)
 
-    async def append_many(self, records: Iterable[dict]) -> int:
-        lines = "".join(json.dumps(record, **_JSONL_KWARGS) + "\n" for record in records)
-        if not lines:
-            return 0
-        async with self._lock:
-            await asyncio.to_thread(self._write_line, lines)
-        return lines.count("\n")
-
     def close(self) -> None:
         with self._thread_lock:
             if self._handle is not None:
@@ -534,7 +485,7 @@ def check_or_claim_run_fingerprint(
 
     if claim:
         marker = run_marker_path(output)
-        # 默认严格模式保留原有空输出认领行为：可覆盖旧/损坏标记。
+        # 严格模式下空输出会重新写入标记，从而覆盖损坏的标记。
         # 绕过模式不能改动已经存在的标记，哪怕输出目前为空。
         if check_fingerprint or not marker.exists():
             write_run_fingerprint(output, fingerprint)

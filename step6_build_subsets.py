@@ -34,7 +34,7 @@ from recsub.subsets import build_tree, stable_id
 
 
 def load_candidates(path_: Path) -> tuple[dict[tuple[str, str], list[dict]], dict[tuple[str, str], str | None]]:
-    """读 step4 候选（JSONL；旧的嵌套 JSON 仍兼容）。"""
+    """读 step4 候选（JSONL；也接受图片 → caption 的嵌套 JSON）。"""
     result = {}
     parent_ids = {}
     for image_name, caption, entry in iter_candidate_entries(path_):

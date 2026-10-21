@@ -1,4 +1,4 @@
-"""集中配置：路径、在线与本地模型、裁剪、词表、归一化、判断与子集门禁。
+"""集中配置：路径、在线与本地模型、裁剪、词表、归一化、门禁、审核与可视化。
 
 各步骤脚本的 argparse 默认值一律取自这里，命令行参数只用于覆盖单次运行，因此
 调整默认行为改这一个文件即可。少数默认值允许用环境变量覆盖，见各条注释。
@@ -22,7 +22,7 @@ def _env(name: str, default: Any) -> Any:
     return default if value is None or value == "" else value
 
 
-_PROVIDER = "qwen"
+_PROVIDER = str(_env("REC_PROVIDER", "qwen")).strip().lower()
 _PROVIDER_DEFAULTS = {
     "qwen": {
         "api_key_env": "DASHSCOPE_API_KEY",
@@ -78,7 +78,7 @@ CONFIG: dict[str, Any] = {
         "splits": "anno/splits.json",
         # step1 产出：实例表
         "instance_data": "anno/instance_data.jsonl",
-        # step2 产出：标注词表；vocabulary 保持 step2/all 的既有默认
+        # step2 产出：标注词表；vocabulary 是 step2 --split all 的默认输出
         "vocabulary": "anno/attribute_vocabulary_all.json",
         "vocabulary_train": "anno/attribute_vocabulary_train.json",
         "vocabulary_all": "anno/attribute_vocabulary_all.json",
@@ -94,13 +94,9 @@ CONFIG: dict[str, Any] = {
         # step4 产出：归一化候选（一行一条，图片名与 caption 为记录字段）
         "predicate_candidates_online": "anno/predicate_candidates.jsonl",
         "predicate_candidates_local": "anno/predicate_candidates_local.jsonl",
-        "generated_vocabulary_online": "anno/vocabulary_generated.json",
-        "generated_vocabulary_local": "anno/vocabulary_generated_local.json",
-        # step5 产出：三值判断，以及探针剪掉的「根 × 恒定条件」
+        # step5 产出：三值判断
         "predicate_labels_online": "anno/predicate_labels.jsonl",
         "predicate_labels_local": "anno/predicate_labels_local.jsonl",
-        "predicate_constant_online": "anno/predicate_constant.json",
-        "predicate_constant_local": "anno/predicate_constant_local.json",
         # step6 产出：门禁筛选后的子集
         "subsets": "anno/fine_grained_subsets.jsonl",
         "subset_decisions": "anno/subset_decisions_log.jsonl",
@@ -113,12 +109,12 @@ CONFIG: dict[str, Any] = {
 
     # ---- 在线调用 ----
     "online": {
-        "concurrency": 2000,
+        "concurrency": 2500,
         "max_retries": 3,
-        "timeout": 300,
+        "timeout": 120,
         # 默认关闭思考；需要时可用 --enable-thinking 显式开启。
         "enable_thinking": False,
-        "batch_size": 2000,
+        "batch_size": 2500,
         # Qwen 按官方视觉输入的模式默认值；DeepSeek 仅非思考模式显式传 temperature=1。
         "sampling": {
             "qwen": {
@@ -153,7 +149,7 @@ CONFIG: dict[str, Any] = {
 
     # ---- step3 / step5 续跑策略（不影响模型输入，不纳入运行指纹）----
     "resume": {
-        # 默认警告后继续；用 --check-fingerprint 可显式恢复严格的配置一致性检查。
+        # 默认警告后继续；用 --check-fingerprint 可显式启用严格的配置一致性检查。
         "check_fingerprint": False,
     },
 
@@ -189,7 +185,7 @@ CONFIG: dict[str, Any] = {
 
     # ---- 词表 ----
     "vocabulary": {
-        # 只从 train 划分统计，避免 val/test 的标注词进入提示词。
+        # step2 的默认划分：all 生成 val/test 共用的全量词表；train 只统计训练根。
         "split": "all",
         # 1 = 收录全部观察到的取值。归一化目标集要尽量全：person 的动作词大多只出现
         # 在一个图里，按频次过滤会把 'climbing a wall' 这类合法标签丢掉。
@@ -212,22 +208,6 @@ CONFIG: dict[str, Any] = {
         "allow_refinement_split": True,
         # 每根待判断谓词的预算，与候选分配顺序共同决定发给 step5 的谓词集合。
         "max_candidates_per_root": 30,
-        "use_llm_tail": False,
-        # LLM 尾部：每次请求带多少条待解析短语，以及同时发多少路请求。
-        "llm_tail_batch_size": 40,
-        "llm_tail_concurrency": 50,
-        # 每个类别最多接受多少条 LLM 新生成的谓词，防止生成词淹没原词表。
-        "max_new_predicates_per_category": 120,
-    },
-
-    # ---- step5 三值判断 ----
-    "judge": {
-        # 探针轮：每根先判这么多实例，用来剪掉几乎恒定的条件；0 表示全量判断。
-        "probe_per_caption": 0,
-        # 探针至少要判这么多实例才敢剪枝，样本不足时宁可多花 token。
-        "probe_min_instances": 4,
-        "constant_yes_ratio": 0.98,
-        "constant_no_ratio": 0.02,
     },
 
     # ---- 子集门禁 ----

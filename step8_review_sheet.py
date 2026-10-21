@@ -1,10 +1,11 @@
 """step8：REC-8K 本地单人浏览器审核工具。
 
 从 step6 的正向子集生成审核条目，并在 loopback 浏览器界面展示原图与实例点。
-可从指定 source ``image_idx`` 开始，拖框选择点并翻转 yes/no；unknown 保持不变。
-审核状态实时保存在单个 JSONL 文件中，子集默认保留，空格显式废弃并跳到下一条。
+可按 source ``image_idx`` 左闭右开区间审核，拖框选择点并翻转 yes/no。
+审核状态实时保存在单个 JSONL 文件中，支持确认保留、废弃、不确定及跳过已审核。
+未审核子集暂按默认规则保留，不确定子集标记为 unknown，等待二次审核。
 
-    python step8_review_sheet.py --image-idx 120
+    python step8_review_sheet.py --start 1000 --end 2000
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ def build_review_items(subsets_path: Path, instances_path: Path | None = None) -
             image_indices[key] = min(image_idx, image_indices.get(key, image_idx))
 
     items = []
-    for node in load_subset_nodes(subsets_path, positive_only=True):
+    for node in load_subset_nodes(subsets_path):
         key = (str(node["image_name"]), str(node["caption"]))
         item = {
             "review_id": node["node_id"],
@@ -100,6 +101,21 @@ def write_review_artifacts(items: Sequence[Mapping[str, Any]], review_dir: Path)
 # --------------------------------------------------------------------------
 # 单人审核状态与最终导出
 # --------------------------------------------------------------------------
+REVIEW_STATUSES = frozenset({"pending", "keep", "discard", "unknown"})
+
+
+def review_status(state: Mapping[str, Any]) -> str:
+    """解析审核状态：优先使用显式 status，缺失时由 discard/reviewed/labels 推断。"""
+    status = state.get("status")
+    if isinstance(status, str) and status in REVIEW_STATUSES:
+        return status
+    if state.get("discard") is True:
+        return "discard"
+    if state.get("reviewed") is True or state.get("labels"):
+        return "keep"
+    return "pending"
+
+
 def load_review_state(state_path: Path) -> dict[str, dict[str, Any]]:
     """Load saved edits, or start empty before the first state file is written."""
     if not state_path.exists():
@@ -135,7 +151,8 @@ def finalize_items(items: Sequence[Mapping[str, Any]], states: Mapping[str, Mapp
     discarded = 0
     for item in items:
         state = states.get(str(item["review_id"]), {})
-        if state.get("discard") is True:
+        status = review_status(state)
+        if status == "discard":
             discarded += 1
             continue
         final_item = dict(item)
@@ -146,8 +163,8 @@ def finalize_items(items: Sequence[Mapping[str, Any]], states: Mapping[str, Mapp
         final_item["node_type"] = "predicate_subset"
         final_item["parent_ids"] = [item.get("parent_id")]
         final_item["review"] = {
-            "status": "keep", "reviewed": state.get("reviewed") is True or bool(state.get("labels")),
-            "defaulted": not (state.get("reviewed") is True or bool(state.get("labels")) or state.get("discard") is True),
+            "status": "unknown" if status == "unknown" else "keep", "reviewed": status == "keep",
+            "defaulted": status == "pending",
             "discarded": False,
             "label_overrides": dict(state.get("labels") or {}),
             "flipped_instance_ids": sorted(int(key) for key in (state.get("labels") or {})),
@@ -177,45 +194,51 @@ header{position:sticky;top:0;background:#fff;padding:12px 18px;border-bottom:1px
 .category-card{color:#194e96;background:#f2f6fd}
 .caption-card{color:#87305c;background:#fdf3f8}
 .predicate-card{color:#007054;background:#f0faf6}
-#review-state{display:block;border:2px solid #987018;border-radius:9px;padding:14px 16px;margin:16px 0 12px;background:#fff8df;color:#765400;font-size:24px;font-weight:800;line-height:1.35}
-#review-state[data-reviewed="true"][data-discarded="false"]{border-color:#16805f;background:#e9f7f0;color:#075c43}
-#review-state[data-reviewed="true"][data-discarded="true"]{border-color:#c92a2a;background:#fff0f0;color:#a11}
-#review-state .state-detail{display:block;font-size:15px;font-weight:500;margin-top:4px}
+#review-state{display:block;border:2px solid #777;border-radius:9px;padding:14px 16px;margin:16px 0 12px;background:#f0f0ec;color:#444;font-size:24px;font-weight:800;line-height:1.35}
+#review-state[data-status="pending"]{border-style:dashed}
+#review-state[data-status="keep"]{border-color:#16805f;background:#e9f7f0;color:#075c43}
+#review-state[data-status="discard"]{border-color:#c92a2a;background:#fff0f0;color:#a11}
+#review-state[data-status="unknown"]{border-color:#194e96;background:#f2f6fd;color:#194e96}
 #counts,#selection-info{font-size:18px;line-height:1.6;margin:6px 0}
 #controls{border-top:1px solid #ddd;margin-top:16px;padding-top:12px}
 #controls h2{font-size:20px;margin:0 0 8px}
 button{font-size:16px;padding:9px 12px;margin:3px;border:1px solid #aaa;border-radius:6px;background:#fff;cursor:pointer}
-button:hover{background:#eef}.discard{border-color:#c92a2a;color:#a11}.flip{border-color:#087f5b;color:#075c43}
+button:hover{background:#eef}.discard{border-color:#c92a2a;color:#a11}.flip{border-color:#087f5b;color:#075c43}.uncertain{border-color:#194e96;color:#194e96}
 #meta{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f0ec;padding:10px;max-height:35vh;overflow:auto;font-size:13px}
 details{margin-top:18px}summary{cursor:pointer;color:#555}
 .small{color:#555;font-size:14px}#status{min-height:1.5em;color:#075c43}
 @media(max-width:900px){#layout{grid-template-columns:1fr}.info-card p{font-size:28px}}
 </style>
-<header><b>REC-8K 子集审核</b> <span id="progress"></span> <span id="image-index"></span></header>
+<header><b>REC-8K 子集审核</b> <span id="review-range"></span> <span id="progress"></span> <span id="image-index"></span></header>
 <div id="layout"><div id="stage"><canvas id="canvas"></canvas></div>
 <aside id="info" aria-label="当前子集信息">
 <section class="info-card category-card"><h2>原始类别</h2><p id="category">—</p></section>
 <section class="info-card caption-card"><h2>原始 caption</h2><p id="caption">—</p></section>
 <section class="info-card predicate-card"><h2>新增划分属性</h2><p id="predicate">—</p></section>
-<span id="review-state"></span>
+<span id="review-state" role="status" aria-live="polite"></span>
 <p id="counts"></p><p id="selection-info">已框选 0 个实例点</p>
 <p class="small">红叉 = 当前子集正样本；绿点 = 同根其余实例（包括 unknown，标签不会因此变成 no）。</p>
 <div id="controls"><h2>审核操作</h2>
-<div><button class="discard" onclick="discardCurrent()">空格：废弃此子集并下一条</button>
-<button class="flip" onclick="flipSelected()">手动翻转所选 yes/no</button>
+<div><button class="flip" onclick="restoreCurrent()">确认保留</button>
+<button class="uncertain" onclick="unknownCurrent()">不确定（unknown）</button>
+<button onclick="skipReviewed()">跳过已审核</button>
+<button class="discard" onclick="discardCurrent()">空格：废弃此子集并下一条</button></div>
+<div><button class="flip" onclick="flipSelected()">手动翻转所选 yes/no</button>
 <button onclick="setSelectedLabel('yes')">将框选点全部设为 yes</button>
-<button onclick="setSelectedLabel('no')">将框选点全部设为 no</button>
-<button onclick="restoreCurrent()">恢复为保留</button></div>
-<p class="small">← / A：上一子集；→ / D：下一子集；空格：废弃并下一条。拖框结束会自动翻转所选 yes/no 一次；如果还要再次切换，可点“手动翻转所选 yes/no”。W：框选点全设 yes；S：框选点全设 no（包括 unknown）。没有任何审核操作的子集默认保留，但状态显示为未审核。</p>
+<button onclick="setSelectedLabel('no')">将框选点全部设为 no</button></div>
+<p class="small">← / A：上一子集；→ / D：下一子集；空格：废弃并下一条。未审核仅暂按默认规则保留，点击“确认保留”才明确完成审核；“不确定”保存为 unknown、留待二次审核。“跳过已审核”从下一条起跳过保留/废弃，停在 unknown 或未审核条目，不越过本次区间。拖框结束会自动翻转所选 yes/no 一次；如果还要再次切换，可点“手动翻转所选 yes/no”。W：框选点全设 yes；S：框选点全设 no（包括点级 unknown）。</p>
 <button onclick="finalize()">保存最终子集</button><p id="status" role="status"></p></div>
 <details><summary>查看技术详情（JSON）</summary><pre id="meta"></pre></details>
 </aside></div>
 <script>
-let items=[],states={},index=0,selected=new Set(),drag=null,img=new Image(),ctx;
+let items=[],states={},index=0,selected=new Set(),drag=null,img=new Image(),ctx,saving=false;
+const reviewTitles={pending:'○ 未审核 · 暂按默认保留',keep:'✓ 已审核 · 已确认保留',discard:'✕ 已审核 · 已废弃',unknown:'？ 不确定 · 待二次审核'};
+const reviewHints={pending:'尚未人工确认；可点击“确认保留”“不确定”或“废弃”',keep:'已保存：已明确确认保留',discard:'已保存：该子集已废弃',unknown:'已保存：unknown，等待二次审核；修改点标签不会取消此状态'};
 const canvas=document.querySelector('#canvas');ctx=canvas.getContext('2d');
 async function request(url,options){const r=await fetch(url,options);if(!r.ok)throw Error(await r.text());return r.json()}
-async function load(){try{const data=await request('/api/items');items=data.items;states=data.states;index=data.start_index;render()}catch(e){setStatus(e.message)}}
+async function load(){try{const data=await request('/api/items');items=data.items;states=data.states;index=data.start_index;const range=data.review_range||{start:0,end:null};document.querySelector('#review-range').textContent=`审核区间 [${range.start}, ${range.end??'不限'})`;render()}catch(e){setStatus(e.message)}}
 function current(){return items[index]}
+function reviewStatus(state={}){if(['pending','keep','discard','unknown'].includes(state.status))return state.status;if(state.discard===true)return 'discard';if(state.reviewed===true||Object.keys(state.labels||{}).length>0)return 'keep';return 'pending'}
 function labelMap(item){const labels={};for(const id of item.yes_ids)labels[id]='yes';for(const id of item.no_ids)labels[id]='no';for(const id of item.unknown_ids)labels[id]='unknown';Object.assign(labels,states[item.review_id]?.labels||{});return labels}
 function renderInfo(item){
  const state=states[item.review_id]||{},predicate=item.predicate||{},labels=labelMap(item);
@@ -226,16 +249,17 @@ function renderInfo(item){
  document.querySelector('#predicate').textContent=predicate.display||predicate.predicate_id||'—';
  document.querySelector('#counts').textContent=`正样本 yes：${counts.yes} · 负样本 no：${counts.no} · 未知：${counts.unknown}`;
  const reviewState=document.querySelector('#review-state');
- const reviewed=state.reviewed===true||state.discard===true||Object.keys(state.labels||{}).length>0;
- reviewState.dataset.reviewed=String(reviewed);
- reviewState.dataset.discarded=String(state.discard===true);
- reviewState.textContent=!reviewed?'⚠ 未审核 · 默认保留':state.discard===true?'✕ 已审核 · 已废弃':'✓ 已审核 · 保留';
+ const status=reviewStatus(state);
+ reviewState.dataset.status=status;
+ reviewState.dataset.reviewed=String(status==='keep'||status==='discard');
+ reviewState.dataset.discarded=String(status==='discard');
+ reviewState.textContent=reviewTitles[status];
  document.querySelector('#selection-info').textContent=`已框选 ${selected.size} 个实例点`;
  document.querySelector('#meta').textContent=JSON.stringify({review_id:item.review_id,predicate,counts,gates:item.gates||{},state,selected_points:selected.size},null,2);
 }
 function render(){const item=current();if(!item)return;selected.clear();document.querySelector('#progress').textContent=`子集 ${index+1}/${items.length}`;document.querySelector('#image-index').textContent=`image_idx=${item.image_idx} · ${item.image_name}`;
 const state=states[item.review_id]||{};renderInfo(item);
-img.onload=()=>{canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;draw()};img.onerror=()=>setStatus('图片加载失败：'+item.image_name);img.src='/image/'+encodeURIComponent(item.review_id)+'?v='+Date.now();setStatus(state.discard?'已保存：该子集已废弃':'未废弃即默认保留；状态自动保存')}
+img.onload=()=>{canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;draw()};img.onerror=()=>setStatus('图片加载失败：'+item.image_name);img.src='/image/'+encodeURIComponent(item.review_id)+'?v='+Date.now();setStatus(reviewHints[reviewStatus(state)])}
 function points(item){return [...item.yes_ids.map((id,i)=>({id,point:item.yes_points[i]})),...item.no_ids.map((id,i)=>({id,point:item.no_points[i]})),...item.unknown_ids.map((id,i)=>({id,point:item.unknown_points[i]}))]}
 function draw(){
  const item=current();if(!item||!img.complete)return;
@@ -253,13 +277,33 @@ function canvasPoint(e){const r=canvas.getBoundingClientRect();return{x:(e.clien
 canvas.addEventListener('pointerdown',e=>{const p=canvasPoint(e);drag={x:p.x,y:p.y,w:0,h:0};canvas.setPointerCapture(e.pointerId);draw()});
 canvas.addEventListener('pointermove',e=>{if(!drag)return;const p=canvasPoint(e);drag.w=p.x-drag.x;drag.h=p.y-drag.y;draw()});
 canvas.addEventListener('pointerup',async()=>{if(!drag)return;const x1=Math.min(drag.x,drag.x+drag.w),x2=Math.max(drag.x,drag.x+drag.w),y1=Math.min(drag.y,drag.y+drag.h),y2=Math.max(drag.y,drag.y+drag.h);selected.clear();for(const {id,point} of points(current()))if(point&&point[0]>=x1&&point[0]<=x2&&point[1]>=y1&&point[1]<=y2)selected.add(String(id));drag=null;draw();renderInfo(current());if(selected.size){await flipSelected()}else setStatus('没有框选到实例点')});
-async function saveState(patch){const item=current();const next={...(states[item.review_id]||{}),...patch,review_id:item.review_id,reviewed:true};states[item.review_id]=await request('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)});renderInfo(item);draw()}
-async function flipSelected(){const item=current();if(!selected.size)return setStatus('没有框选点');const labels=labelMap(item);let changed=0;for(const id of selected){if(labels[id]==='yes'){labels[id]='no';changed++}else if(labels[id]==='no'){labels[id]='yes';changed++}}if(!changed)return setStatus(`已框选 ${selected.size} 个点，但没有可翻转的 yes/no 标签`);const changes={};for(const id of selected)if(labels[id]==='yes'||labels[id]==='no')changes[id]=labels[id];await saveState({labels:{...(states[item.review_id]?.labels||{}),...changes}});setStatus(`框选后已自动翻转并保存 ${changed} 个 yes/no 标签`)}
-async function setSelectedLabel(label){const item=current();if(!selected.size)return setStatus('没有框选点');const changes={};for(const id of selected)changes[id]=label;await saveState({labels:{...(states[item.review_id]?.labels||{}),...changes}});setStatus(`已将 ${selected.size} 个框选点全部设为 ${label} 并保存`)}
-async function discardCurrent(){await saveState({discard:true});setStatus('已废弃并保存');next()}
-async function restoreCurrent(){await saveState({discard:false});setStatus('已恢复为默认保留')}
-function next(){if(index<items.length-1){index++;render()}else setStatus('已到最后一个子集')};function previous(){if(index>0){index--;render()}}
-async function finalize(){try{const result=await request('/api/finalize',{method:'POST'});setStatus(`最终子集已保存：保留 ${result.kept}，废弃 ${result.discarded}`)}catch(e){setStatus(e.message)}}
+async function saveState(patch){
+ if(saving){setStatus('正在保存，请稍候');return false}
+ const item=current(),previous=states[item.review_id]||{};
+ let status=patch.status??reviewStatus(previous);
+ if(patch.status===undefined&&patch.labels&&status==='pending')status='keep';
+ const next={...previous,...patch,review_id:item.review_id,status,discard:status==='discard',reviewed:status==='keep'||status==='discard'};
+ saving=true;
+ try{states[item.review_id]=await request('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)});renderInfo(item);draw();return true}
+ catch(e){setStatus('保存失败：'+e.message);return false}
+ finally{saving=false}
+}
+async function flipSelected(){const item=current();if(!selected.size)return setStatus('没有框选点');const labels=labelMap(item);let changed=0;for(const id of selected){if(labels[id]==='yes'){labels[id]='no';changed++}else if(labels[id]==='no'){labels[id]='yes';changed++}}if(!changed)return setStatus(`已框选 ${selected.size} 个点，但没有可翻转的 yes/no 标签`);const changes={};for(const id of selected)if(labels[id]==='yes'||labels[id]==='no')changes[id]=labels[id];if(await saveState({labels:{...(states[item.review_id]?.labels||{}),...changes}}))setStatus(`框选后已自动翻转并保存 ${changed} 个 yes/no 标签`)}
+async function setSelectedLabel(label){const item=current();if(!selected.size)return setStatus('没有框选点');const changes={};for(const id of selected)changes[id]=label;if(await saveState({labels:{...(states[item.review_id]?.labels||{}),...changes}}))setStatus(`已将 ${selected.size} 个框选点全部设为 ${label} 并保存`)}
+async function discardCurrent(){if(await saveState({status:'discard'})){setStatus('已废弃并保存');next()}}
+async function restoreCurrent(){if(await saveState({status:'keep'}))setStatus('已明确确认保留并保存')}
+async function unknownCurrent(){if(await saveState({status:'unknown'}))setStatus('已保存为 unknown，等待二次审核')}
+function next(){if(saving)return setStatus('正在保存，请稍候');if(index<items.length-1){index++;render()}else setStatus('已到本次区间最后一个子集')}
+function previous(){if(saving)return setStatus('正在保存，请稍候');if(index>0){index--;render()}else setStatus('已到本次区间第一个子集')}
+function skipReviewed(){
+ if(saving)return setStatus('正在保存，请稍候');
+ for(let candidate=index+1;candidate<items.length;candidate++){
+  if(['keep','discard'].includes(reviewStatus(states[items[candidate].review_id])))continue;
+  index=candidate;render();return;
+ }
+ setStatus('本次区间内没有后续 unknown 或未审核子集，已到区间末尾');
+}
+async function finalize(){if(saving)return setStatus('正在保存，请稍候');try{const result=await request('/api/finalize',{method:'POST'});setStatus(`最终子集已保存：保留 ${result.kept}（含默认保留及 unknown），废弃 ${result.discarded}`)}catch(e){setStatus(e.message)}}
 function setStatus(text){document.querySelector('#status').textContent=text}
 document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName))return;if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A')previous();else if(e.key==='ArrowRight'||e.key==='d'||e.key==='D')next();else if(e.key==='w'||e.key==='W')setSelectedLabel('yes');else if(e.key==='s'||e.key==='S')setSelectedLabel('no');else if(e.key===' '){e.preventDefault();discardCurrent()}});load();
 </script>"""
@@ -296,8 +340,12 @@ class ReviewHandler(http.server.BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_bytes(_HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif parsed.path == "/api/items":
-            self.send_json({"items": self.state["items"], "states": self.state["states"],
-                            "start_index": self.state["start_index"]})
+            with self.state["lock"]:
+                states = {key: value for key, value in self.state["states"].items()
+                          if key in self.state["item_ids"]}
+            self.send_json({"items": self.state["items"], "states": states,
+                            "start_index": self.state["start_index"],
+                            "review_range": self.state["review_range"]})
         elif parsed.path.startswith("/image/"):
             review_id = urllib.parse.unquote(parsed.path[len("/image/"):])
             item = self.state["items_by_id"].get(review_id)
@@ -317,34 +365,44 @@ class ReviewHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         route = urllib.parse.urlparse(self.path).path
         try:
+            if route == "/api/finalize":
+                with self.state["lock"]:
+                    report = finalize_items(self.state["all_items"], self.state["states"],
+                                            self.state["final_output"])
+                self.send_json(report)
+                return
+            if route != "/api/state":
+                self.send_bytes(b"not found", "text/plain", 404)
+                return
             size = int(self.headers.get("Content-Length", "0"))
             if size <= 0 or size > 64_000:
                 raise ValueError("invalid request size")
             payload = json.loads(self.rfile.read(size))
-            if route == "/api/state":
-                review_id = str(payload.get("review_id") or "")
-                if review_id not in self.state["item_ids"]:
-                    raise ValueError("未知 review_id")
-                item = self.state["items_by_id"][review_id]
-                valid_ids = set(map(str, [*item["yes_ids"], *item["no_ids"], *item["unknown_ids"]]))
-                labels = payload.get("labels", {})
-                if not isinstance(labels, dict) or any(
-                        str(key) not in valid_ids or value not in {"yes", "no"}
-                        for key, value in labels.items()):
-                    raise ValueError("labels 仅能将该子集的 yes/no/unknown 实例设置为 yes 或 no")
-                row = {"review_id": review_id, "discard": payload.get("discard") is True,
-                       "reviewed": payload.get("reviewed") is True,
-                       "labels": {str(key): value for key, value in labels.items()}}
-                with self.state["lock"]:
-                    append_jsonl(self.state["state_path"], row, fsync=True)
-                    self.state["states"][review_id] = row
-                self.send_json(row)
-            elif route == "/api/finalize":
-                report = finalize_items(self.state["items"], self.state["states"],
-                                        self.state["final_output"])
-                self.send_json(report)
-            else:
-                self.send_bytes(b"not found", "text/plain", 404)
+            if not isinstance(payload, dict):
+                raise ValueError("审核状态必须是 JSON 对象")
+            review_id = str(payload.get("review_id") or "")
+            if review_id not in self.state["item_ids"]:
+                raise ValueError("未知或不在本次审核区间内的 review_id")
+            if "status" in payload and (
+                    not isinstance(payload["status"], str) or payload["status"] not in REVIEW_STATUSES):
+                raise ValueError("status 仅能为 pending、keep、discard 或 unknown")
+            status = review_status(payload)
+            item = self.state["items_by_id"][review_id]
+            valid_ids = set(map(str, [*item["yes_ids"], *item["no_ids"], *item["unknown_ids"]]))
+            labels = payload.get("labels", {})
+            if not isinstance(labels, dict) or any(
+                    str(key) not in valid_ids or value not in {"yes", "no"}
+                    for key, value in labels.items()):
+                raise ValueError("labels 仅能将该子集的 yes/no/unknown 实例设置为 yes 或 no")
+            # status 是权威字段；同时写入 discard/reviewed，使缺少 status 的行
+            # 也能按同一规则推断状态。
+            row = {"review_id": review_id, "status": status, "discard": status == "discard",
+                   "reviewed": status in {"keep", "discard"},
+                   "labels": {str(key): value for key, value in labels.items()}}
+            with self.state["lock"]:
+                append_jsonl(self.state["state_path"], row, fsync=True)
+                self.state["states"][review_id] = row
+            self.send_json(row)
         except Exception as error:
             self.send_bytes(str(error).encode("utf-8"), "text/plain; charset=utf-8", 400)
 
@@ -358,16 +416,42 @@ def start_index_for(items: Sequence[Mapping[str, Any]], image_idx: int) -> int:
     raise ValueError(f"image_idx={image_idx} 超出可审核图片范围")
 
 
+def validate_review_range(start: int, end: int | None, image_idx: int | None = None) -> None:
+    if start < 0:
+        raise ValueError("--start 必须是非负整数")
+    if end is not None and end <= start:
+        raise ValueError("--end 必须大于 --start（审核区间左闭右开）")
+    if image_idx is not None and (image_idx < start or (end is not None and image_idx >= end)):
+        raise ValueError("--image-idx 必须位于本次审核区间内")
+
+
+def select_review_items(items: Sequence[dict], start: int = 0, end: int | None = None) -> list[dict]:
+    """Select every subset in the half-open source image range, including sibling subsets."""
+    validate_review_range(start, end)
+    selected = [item for item in items
+                if int(item["image_idx"]) >= start and (end is None or int(item["image_idx"]) < end)]
+    if not selected:
+        upper = "不限" if end is None else str(end)
+        raise ValueError(f"审核区间 [{start}, {upper}) 内没有可审核子集")
+    return sorted(selected, key=lambda item: (
+        int(item["image_idx"]), str(item.get("caption", "")), str(item["review_id"])))
+
+
 def serve(items: Sequence[dict], image_dir: Path, state_path: Path,
-          final_output: Path, host: str, port: int, image_idx: int) -> None:
+          final_output: Path, host: str, port: int, image_idx: int | None = None,
+          start: int = 0, end: int | None = None) -> None:
+    validate_review_range(start, end, image_idx)
+    all_items = list(items)
+    items = select_review_items(all_items, start, end)
+    image_idx = start if image_idx is None else image_idx
     start_index = start_index_for(items, image_idx)
     states = load_review_state(state_path)
-    items = list(items)
     state = {
-        "items": items, "item_ids": {item["review_id"] for item in items},
+        "items": items, "all_items": all_items, "item_ids": {item["review_id"] for item in items},
         "items_by_id": {item["review_id"]: item for item in items},
         "states": states, "state_path": state_path, "final_output": final_output,
         "image_dir": image_dir, "start_index": start_index, "lock": threading.Lock(),
+        "review_range": {"start": start, "end": end},
     }
 
     class LocalReviewServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -376,8 +460,10 @@ def serve(items: Sequence[dict], image_dir: Path, state_path: Path,
     server = LocalReviewServer((host, port), ReviewHandler)
     server.state = state  # type: ignore[attr-defined]
     url = f"http://{host}:{port}/"
+    upper = "不限" if end is None else str(end)
     print(f"✅ 单人本地审核：{url}")
-    print(f"   起始 image_idx={image_idx}，共 {len(items)} 个子集；状态 → {state_path}")
+    print(f"   审核区间 [{start}, {upper})，起始 image_idx={items[start_index]['image_idx']}，"
+          f"共 {len(items)} 个子集；状态 → {state_path}")
     try:
         import webbrowser
         webbrowser.open(url)
@@ -386,7 +472,8 @@ def serve(items: Sequence[dict], image_dir: Path, state_path: Path,
         print("审核已停止")
     finally:
         server.server_close()
-        report = finalize_items(items, states, final_output)
+        with state["lock"]:
+            report = finalize_items(all_items, states, final_output)
         print(f"✅ 最终子集已保存：保留 {report['kept']}，废弃 {report['discarded']} → {final_output}")
 
 
@@ -401,8 +488,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--review-dir", type=Path, default=resolve_dir(CONFIG["paths"]["review_dir"]))
     parser.add_argument("--build", action="store_true", help="只生成 review_items.jsonl + review_sheet.csv")
     parser.add_argument("--serve", action="store_true", help="使用已有审核条目启动本地浏览器")
-    parser.add_argument("--image-idx", type=int, default=0,
-                        help="从此 source image_idx 开始（step1 从 0 编号；默认 0）")
+    parser.add_argument("--start", type=int, default=0, help="审核区间起点 image_idx（含，默认 0）")
+    parser.add_argument("--end", type=int, default=None, help="审核区间终点 image_idx（不含，默认不限）")
+    parser.add_argument("--image-idx", type=int, default=None,
+                        help="初始 source image_idx（默认区间起点；不改变审核范围）")
     parser.add_argument("--image-dir", type=Path, default=Path(CONFIG["image_dir"]))
     parser.add_argument("--port", type=int, default=CONFIG["review"]["port"])
     parser.add_argument("--items", type=Path, default=None,
@@ -410,7 +499,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--state", type=Path, default=None,
                         help="单人审核状态 JSONL；默认 review/review_state.jsonl")
     parser.add_argument("--final-output", type=Path, default=path("subsets_final"))
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    try:
+        validate_review_range(args.start, args.end, args.image_idx)
+    except ValueError as error:
+        parser.error(str(error))
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -434,7 +528,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise FileNotFoundError(f"找不到审核条目：{items_path}，先移除 --serve 重新构建")
         items = list(iter_jsonl(items_path)) if not should_build else items
         serve(items, args.image_dir, state_path, args.final_output,
-              "127.0.0.1", args.port, args.image_idx)
+              CONFIG["review"]["host"], args.port, args.image_idx, args.start, args.end)
         return 0
     except KeyboardInterrupt:
         print("审核已停止")

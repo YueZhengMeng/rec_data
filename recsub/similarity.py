@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import re
+from typing import Mapping
 
 from recsub.vocabulary import normalize_surface, strip_polarity
 
@@ -48,6 +49,11 @@ _RELATION_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("front", ("in front of", "front")),
     ("edge", ("edge", "border", "rim", "boundary", "margin")),
 )
+_RELATION_PATTERNS = tuple(
+    (label, tuple(re.compile(rf"(?<!\w){re.escape(marker)}(?!\w)")
+                  if " " in marker else marker for marker in markers))
+    for label, markers in _RELATION_MARKERS
+)
 _POLARITY_TERMS = {"no", "not", "without", "never", "none", "neither", "nor"}
 # 出现在归一化结果里的施动者动词；参与槽位身份，必须成为互斥面。
 _AGENT_VERBS = {
@@ -65,28 +71,29 @@ def _tokens(text: str) -> set[str]:
     return set(re.findall(r"[\w'-]+", text.lower()))
 
 
-def _relation_facet(text: str) -> frozenset[str]:
+def _relation_facet(text: str, tokens: set[str] | None = None) -> frozenset[str]:
     """抽取短语里的空间关系词。
 
     只比较「两边都出现了关系词」的情况：没有关系词的一边不构成约束，否则
     ``barrel`` 与 ``inside the barrel`` 会被误判为互斥。
     """
     normalized = text.lower()
-    tokens = _tokens(normalized)
+    if tokens is None:
+        tokens = _tokens(normalized)
     found = set()
-    for label, markers in _RELATION_MARKERS:
+    for label, markers in _RELATION_PATTERNS:
         for marker in markers:
-            if " " in marker:
-                if re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", normalized):
+            if isinstance(marker, str):
+                if marker in tokens:
                     found.add(label)
-            elif marker in tokens:
+            elif marker.search(normalized):
                 found.add(label)
     return frozenset(found)
 
 
-def exclusive_signature(text: str, *, dimension: str | None = None,
-                        verb: str | None = None) -> dict[str, frozenset[str]]:
-    """抽取「一旦不同就不能合并」的语义面。"""
+def phrase_features(text: str, *, dimension: str | None = None,
+                    verb: str | None = None) -> tuple[dict[str, frozenset[str]], set[str]]:
+    """一次解析得到语义面和 token；仅供当前比较使用，不保留缓存。"""
     normalized = normalize_surface(text)
     tokens = _tokens(normalized)
     result: dict[str, frozenset[str]] = {}
@@ -128,11 +135,26 @@ def exclusive_signature(text: str, *, dimension: str | None = None,
     if anchor:
         result["anchor"] = frozenset({anchor.group(1)})
 
-    relations = _relation_facet(normalized)
+    relations = _relation_facet(normalized, tokens)
     if relations:
         result["relation"] = relations
 
-    return result
+    return result, tokens
+
+
+def exclusive_signature(text: str, *, dimension: str | None = None,
+                        verb: str | None = None) -> dict[str, frozenset[str]]:
+    """抽取「一旦不同就不能合并」的语义面。"""
+    return phrase_features(text, dimension=dimension, verb=verb)[0]
+
+
+def compatible_signatures(left: Mapping[str, frozenset[str]],
+                          right: Mapping[str, frozenset[str]]) -> tuple[bool, str]:
+    """比较已解析的语义面，按 facet 排序返回第一个不兼容面。"""
+    for facet in sorted(left.keys() & right.keys()):
+        if left[facet].isdisjoint(right[facet]):
+            return False, facet
+    return True, ""
 
 
 def compatible(left: str, right: str, *, left_dimension: str | None = None,
@@ -141,10 +163,7 @@ def compatible(left: str, right: str, *, left_dimension: str | None = None,
     """两个短语是否允许按相似度合并；第二个返回值是不允许的原因。"""
     left_signature = exclusive_signature(left, dimension=left_dimension, verb=left_verb)
     right_signature = exclusive_signature(right, dimension=right_dimension, verb=right_verb)
-    for facet in sorted(left_signature.keys() & right_signature.keys()):
-        if left_signature[facet].isdisjoint(right_signature[facet]):
-            return False, facet
-    return True, ""
+    return compatible_signatures(left_signature, right_signature)
 
 
 def is_refinement(phrase: str, target: str) -> bool:
@@ -152,7 +171,7 @@ def is_refinement(phrase: str, target: str) -> bool:
 
     ``white laces`` 相对词表里的 ``white`` 是细化，不是同义：直接按相似度合并
     会把「鞋带是白的」这个新信息吃掉，最后因为与父属性同义而被丢弃。这类短语
-    应当交给 LLM 尾部生成新谓词。
+    保留为未解析短语。
     """
     phrase_tokens = _tokens(normalize_surface(phrase))
     target_tokens = _tokens(normalize_surface(target))

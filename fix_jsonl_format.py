@@ -1,16 +1,13 @@
 """把被写成「缩进 JSON」的 .jsonl 文件重新压成一行一条记录的 JSONL。
 
-背景
-----
-``anno/`` 里部分在线步骤的产物虽然后缀是 ``.jsonl``，内容却是每一条记录
-``indent=2`` 格式化后首尾相接的 JSON 流。``iter_jsonl`` 按行解析时会立刻失败，
-下游所有步骤都读不动。
+有些 ``.jsonl`` 文件的内容是每一条记录 ``indent=2`` 格式化后首尾相接的 JSON 流，
+``iter_jsonl`` 按行解析会失败，下游步骤读不动。
 
 本脚本流式解析源文件（兼容 JSONL、顶层数组、首尾相接 JSON 流三种写法），
 逐条 ``json.dumps`` 后写一行，默认原地原子替换；已经是一行一条的文件默认跳过。
 
     python fix_jsonl_format.py                    # 修复 anno/ 下所有 .jsonl
-    python fix_jsonl_format.py anno exp          # 指定多个目录/文件
+    python fix_jsonl_format.py anno path/to/data  # 指定多个目录/文件
     python fix_jsonl_format.py --dry-run          # 只统计条数，不写文件
     python fix_jsonl_format.py --output-dir anno_fixed   # 另存，不改原文件
 """

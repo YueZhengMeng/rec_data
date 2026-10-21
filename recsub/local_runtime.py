@@ -67,17 +67,6 @@ def validate_runtime(accelerator, per_rank_batch_size: int) -> None:
     )
 
 
-def broadcast_object(accelerator, value: Any) -> Any:
-    """Broadcast one Python object from rank zero without metric truncation."""
-    if int(getattr(accelerator, "num_processes", 1)) == 1:
-        return value
-    from accelerate.utils import broadcast_object_list
-
-    objects = [value if accelerator.is_main_process else None]
-    broadcast_object_list(objects, from_process=0)
-    return objects[0]
-
-
 def ordered_records(batch: list[dict], gathered: list[dict], failure_factory) -> list[dict]:
     """Restore batch order and synthesize one failure row per missing ID."""
     expected = {item["instance_id"] for item in batch}

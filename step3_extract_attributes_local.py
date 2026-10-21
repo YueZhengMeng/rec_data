@@ -122,7 +122,7 @@ def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -
     )
     image_names = ({name.strip() for name in args.image_names.split(",") if name.strip()}
                    if args.image_names else None)
-    selected, stats = select_work(
+    selected, _ = select_work(
         args.instances, image_names=image_names, sample_per_category=args.sample_per_category,
         seed=args.seed, completed=completed,
         sample_output=(args.sample_output if accelerator.is_main_process and args.sample_per_category > 0

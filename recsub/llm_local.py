@@ -1,7 +1,7 @@
 """本地 Qwen 推理：加载、批量生成与逐 token 置信度统计。
 
 模型路径、量化模式、浮点类型与全部生成参数都由调用方显式传入，默认值集中在
-``recsub/config.py`` 的 ``local`` 段；本模块不再自带第二套默认值。
+``recsub/config.py`` 的 ``local`` 段；本模块只接收参数，不维护第二套默认值。
 """
 
 from __future__ import annotations
@@ -468,8 +468,3 @@ class LocalAttributesExtractor:
                 "generation_failed": not bool(content.strip()),
             })
         return results
-
-    def extract_attributes(self, instance_data: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
-        """单条实例的调用接口，与在线入口的 :meth:`OnlineModel.complete` 用法相近。"""
-        result = self.infer_batch([instance_data])[0]
-        return result["content"], result

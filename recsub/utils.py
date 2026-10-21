@@ -203,7 +203,7 @@ def extract_and_parse_json(text: str):
     if not json_objects:
         return None
 
-    # 保留原函数在存在多个 JSON 时选择最长对象的行为。
+    # 存在多个 JSON 时选择最长对象，避免把模型输出里的短片段当成结果。
     try:
         return max(json_objects, key=lambda value: len(json.dumps(value, ensure_ascii=False)))
     except (TypeError, ValueError):

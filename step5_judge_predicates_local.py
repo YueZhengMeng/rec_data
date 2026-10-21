@@ -1,6 +1,6 @@
 """step5：使用本地 Qwen 对候选谓词做逐实例三值判断。
 
-判断 prompt、候选处理、探针剪枝和输出记录与
+判断 prompt、候选处理和输出记录与
 :mod:`step5_judge_predicates_online` 完全一致；只有图像输入和推理后端不同。
 
     python step5_judge_predicates_local.py --model-path F:/model/Qwen3.5-0.8B
@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -22,13 +22,13 @@ from recsub.config import CONFIG, crop_config, path
 from recsub.console import configure_console
 from recsub.crop import AdaptiveCropper
 from recsub.extract import file_digest, run_fingerprint
-from recsub.io import ensure_parent, iter_jsonl, write_json_atomic
+from recsub.io import ensure_parent, iter_jsonl
 from recsub.judgment import (
     build_work, completed_judgments, expand_labels, load_caption_predicates,
-    parse_labels, ratio_prune, restrict_labels,
+    parse_labels,
 )
 from recsub.local_runtime import (
-    broadcast_object, create_accelerator, ordered_records, validate_runtime,
+    create_accelerator, ordered_records, validate_runtime,
 )
 from recsub.prompts import PREDICATE_JUDGMENT_PROMPT, build_judgment_prompt
 
@@ -53,10 +53,6 @@ def judgment_fingerprint(args: argparse.Namespace, world_size: int = 1) -> str:
         "min_p": args.min_p,
         "presence_penalty": args.presence_penalty,
         "repetition_penalty": args.repetition_penalty,
-        "probe_per_caption": args.probe_per_caption,
-        "probe_min_instances": args.probe_min_instances,
-        "constant_yes_ratio": args.constant_yes_ratio,
-        "constant_no_ratio": args.constant_no_ratio,
         "world_size": world_size,
         "batch_size_per_rank": args.batch_size,
         "crop": asdict(crop_config()),
@@ -161,9 +157,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--check-fingerprint", action=argparse.BooleanOptionalAction,
                         default=CONFIG["resume"]["check_fingerprint"],
                         help="校验输出旁挂的运行指纹；关闭后不会读取既有标记")
-    parser.add_argument("--constant-output", type=Path,
-                        default=path("predicate_constant_local"),
-                        help="探针剪掉的「根×恒定条件」记录")
     parser.add_argument("--image-names", default=None)
     parser.add_argument("--batch-size", type=int, default=CONFIG["local"]["batch_size"],
                         help="每张 GPU 的实例数")
@@ -189,16 +182,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         default=CONFIG["local"]["repetition_penalty"])
     parser.add_argument("--record-token-confidences", action=argparse.BooleanOptionalAction,
                         default=CONFIG["local"]["record_token_confidences"])
-    parser.add_argument("--probe-per-caption", type=int,
-                        default=CONFIG["judge"]["probe_per_caption"],
-                        help="探针轮每根先判这么多实例以剪掉恒定条件；0 表示全量判断")
-    parser.add_argument("--probe-min-instances", type=int,
-                        default=CONFIG["judge"]["probe_min_instances"],
-                        help="探针至少要判这么多实例才敢剪枝，样本不足时宁可多花 token")
-    parser.add_argument("--constant-yes-ratio", type=float,
-                        default=CONFIG["judge"]["constant_yes_ratio"])
-    parser.add_argument("--constant-no-ratio", type=float,
-                        default=CONFIG["judge"]["constant_no_ratio"])
     return parser.parse_args(argv)
 
 
@@ -216,14 +199,12 @@ def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -
 
     by_root, phrases_by_root, ids_by_display = load_caption_predicates(args.candidates)
     fingerprint = judgment_fingerprint(args, accelerator.num_processes)
-    completed, prior_rows = completed_judgments(
+    completed, _ = completed_judgments(
         args.output,
         fingerprint,
         claim=accelerator.is_main_process,
         check_fingerprint=args.check_fingerprint,
     )
-    if prior_rows and args.probe_per_caption > 0:
-        raise ValueError("探针模式在部分写入后不能安全重算剪枝；请指定新的 --output")
 
     image_names = ({name.strip() for name in args.image_names.split(",") if name.strip()}
                    if args.image_names else None)
@@ -250,7 +231,6 @@ def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -
     process_batch_size = args.batch_size * accelerator.num_processes
     writer = args.output
     ensure_parent(writer)
-    constant_pairs: dict[str, list[str]] = {}
     counters = Counter()
 
     def local_slice(batch: list[dict]) -> list[dict]:
@@ -261,13 +241,11 @@ def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -
         local_records = judge_local_batch(local_slice(batch), phrases, extractor)
         return list(gather_object(local_records))
 
-    def append_records(records: Sequence[dict], keep: Sequence[str] | None = None) -> None:
+    def append_records(records: Sequence[dict]) -> None:
         if not accelerator.is_main_process or not records:
             return
         with writer.open("a", encoding="utf-8") as handle:
             for record in records:
-                if keep is not None:
-                    record = restrict_labels(record, keep)
                 counters["written"] += 1
                 if record.get("judgment_failed"):
                     counters["failed"] += 1
@@ -296,52 +274,9 @@ def run(args: argparse.Namespace, *, accelerator=None, extractor_factory=None) -
                                   f"已判 {counters['judged']} 失败 {counters['failed']}")
             accelerator.wait_for_everyone()
 
-    active_phrases = dict(phrases_by_root)
-    if args.probe_per_caption > 0:
-        probe_items = [item for group in work.values() for item in group[:args.probe_per_caption]]
-        collected: dict[tuple[str, str], list[dict]] = defaultdict(list)
-        for start in range(0, len(probe_items), process_batch_size):
-            batch = probe_items[start:start + process_batch_size]
-            gathered = dispatch(batch, active_phrases)
-            if accelerator.is_main_process:
-                for record in ordered_records(batch, gathered, failure_record):
-                    if not record.get("judgment_failed"):
-                        collected[(record["image_name"], record["caption"])].append(record)
-            accelerator.wait_for_everyone()
-
-        if accelerator.is_main_process:
-            for key, phrases in phrases_by_root.items():
-                kept, pruned = ratio_prune(
-                    collected.get(key, ()), phrases,
-                    args.constant_yes_ratio, args.constant_no_ratio, args.probe_min_instances,
-                )
-                active_phrases[key] = tuple(kept)
-                if pruned:
-                    constant_pairs[f"{key[0]}\t{key[1]}"] = list(pruned)
-            for key, records in collected.items():
-                append_records(records, active_phrases.get(key, ()))
-            judged_ids = {record["instance_id"] for records in collected.values() for record in records}
-        else:
-            judged_ids = set()
-        state = broadcast_object(accelerator, {
-            "active_phrases": active_phrases if accelerator.is_main_process else None,
-            "judged_ids": sorted(judged_ids) if accelerator.is_main_process else None,
-        })
-        active_phrases = state["active_phrases"]
-        judged_ids = set(state["judged_ids"])
-        remaining = [item for item in items if item["instance_id"] not in judged_ids]
-        process_batches(remaining, active_phrases)
-    else:
-        process_batches(items, active_phrases)
+    process_batches(items, phrases_by_root)
 
     if accelerator.is_main_process:
-        if constant_pairs:
-            write_json_atomic(args.constant_output, {
-                "yes_ratio_threshold": args.constant_yes_ratio,
-                "no_ratio_threshold": args.constant_no_ratio,
-                "probe_per_caption": args.probe_per_caption,
-                "pairs": constant_pairs,
-            })
         accelerator.print(
             f"✅ 判断完成：已判 {counters['judged']}，失败 {counters['failed']}；结果 → {args.output}"
         )
@@ -355,8 +290,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not getattr(args, name).is_file():
             print(f"❌ 找不到 {name}：{getattr(args, name)}", file=sys.stderr)
             return 1
-    if args.batch_size < 1 or args.max_new_tokens < 1 or args.probe_per_caption < 0:
-        print("❌ batch-size/max-new-tokens/probe-per-caption 参数无效", file=sys.stderr)
+    if args.batch_size < 1 or args.max_new_tokens < 1:
+        print("❌ batch-size/max-new-tokens 参数无效", file=sys.stderr)
         return 1
     try:
         return run(args)

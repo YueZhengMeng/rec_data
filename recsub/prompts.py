@@ -1,4 +1,4 @@
-"""三个阶段的提示词：开放提取、归一化尾部改写、闭集三值判断。
+"""两个阶段的提示词：开放提取与闭集三值判断。
 
 几条贯穿全流程的约定
 --------------------
@@ -82,44 +82,7 @@ def build_extract_attributes_prompt(category, attributes, prompt=EXTRACT_ATTRIBU
 
 
 # ============================================================
-# 二、归一化尾部改写（step4）
-# ============================================================
-NORMALIZE_TAIL_PROMPT = """
-You are given a category, this dataset's controlled attribute vocabulary for that category, and a list of leftover attribute phrases that could not be matched to the vocabulary automatically.
-
-For each leftover phrase decide exactly one of:
-* {"phrase": "<phrase>", "match": "<predicate_id>"} — it means the same as an existing vocabulary entry. Use the entry's id verbatim.
-* {"phrase": "<phrase>", "new": {"dimension": "<dimension>", "value": "<value>", "verb": "<action verb or null>", "polarity": "positive|negative"}} — it is a genuinely new attribute worth reusing across images, expressible in the same style as the vocabulary.
-* {"phrase": "<phrase>", "drop": "<short reason>"} — it is too specific to this scene or instance, too vague, or not decidable from an image.
-
-Rules:
-* Never invent a predicate_id. It must appear verbatim in the vocabulary below.
-* Prefer "match" over "new" whenever the phrase is a paraphrase of an entry.
-* Prefer "drop" for anything tied to one particular layout ("the third row from the top"), for one-off visual noise, and for wording that restates the parent attribute.
-* For a new entry, "value" must be short, in English, and reusable: a colour, a shape, a material, an action, a direction, or a relation with a named anchor.
-* Keep polarity out of "value"; use the "polarity" field.
-
-Return ONLY a JSON list, one object per input phrase, in the same order.
-
-Category: <|>Category Here<|>
-Controlled vocabulary (predicate_id → wording):
-<|>Vocabulary Here<|>
-Leftover phrases (JSON): <|>Phrases Here<|>
-"""
-
-
-def build_normalize_tail_messages(category: str, vocabulary_lines: list[str],
-                                  phrases: list[str]) -> list[dict]:
-    """组装归一化尾部的纯文本请求（不需要图片）。"""
-    text = (NORMALIZE_TAIL_PROMPT
-            .replace("<|>Category Here<|>", str(category))
-            .replace("<|>Vocabulary Here<|>", "\n".join(vocabulary_lines) or "(empty)")
-            .replace("<|>Phrases Here<|>", json.dumps(phrases, ensure_ascii=False)))
-    return [{"role": "user", "content": text}]
-
-
-# ============================================================
-# 三、闭集三值判断（step5）
+# 二、闭集三值判断（step5）
 # ============================================================
 PREDICATE_JUDGMENT_PROMPT = """
 You are given three views of the same annotated target instance:
@@ -163,7 +126,7 @@ def build_judgment_prompt(attributes: str, category: str, phrases: list[str],
 
 
 # ============================================================
-# 四、消息组装
+# 三、消息组装
 # ============================================================
 def build_instance_messages(base64_image_global: str, base64_image_context: str,
                             base64_image_fine: str, text_prompt: str) -> list[dict]:

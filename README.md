@@ -3,16 +3,16 @@
 这套代码在 REC-8K 原始标注的基础上，构建 **少量、可跨图复用、可人工审核**的
 细粒度谓词子集，供后续互补预测与子集对比学习使用。
 
-> `old/` 是历史实验目录，不属于本流水线，也没有任何步骤导入它。
 > 本项目不在数据侧实现训练 loss；对比学习和互补预测在下游训练代码中实现。
 
 ## 设计要点
 
 - **提取不带词表**。step3 只给类别与已知属性，让模型开放式描述目标；词表在
   step4 的归一化阶段才介入，避免开放式提取被词表规模限制。
-- **词表只从 train 划分构建**，避免 val/test 的标注词进入提示词。
-- **候选分四层预算**：同类相似词表词 → 跨类别相似词表词 → 同类不相似词表词 →
-  LLM 尾部。前三层有视觉证据，最后一层只表示「值得问」。
+- **词表按划分隔离**。step4 对 train 根使用 `--split train` 构建的词表，对
+  val/test 根使用 `--split all` 的全量词表；step3 的开放提取 prompt 不含词表。
+- **候选分三层预算**：同类相似词表词 → 跨类别相似词表词 → 同类不相似词表词。
+  前两层有视觉证据，最后一层只表示「值得问」。
 - **判断保留三值**。只有看清目标相关部位且明确不成立才判 `no`；小、遮挡、
   边界、锚点不明一律 `unknown`，且 `unknown` 不会被补成 `no`。
 - **子集过门禁**：yes/no 两侧都要够大、unknown 足够少、条件之间不高度冗余，
@@ -22,19 +22,19 @@
 
 ```text
 step1_data_preprocess.py            原始 annotations.json → instance_data.jsonl
-step2_build_vocabulary.py           train 标注 → attribute_vocabulary.json / .md
-step3_extract_attributes_online.py  无词表开放式提取（在线）→ extract_result_online.jsonl
-step3_extract_attributes_local.py   同一 prompt 的本地 Qwen 版本 → extract_result_local.jsonl
-step4_normalize_predicates.py       归一化及四类预算 → predicate_candidates.jsonl
+step2_build_vocabulary.py           标注 → attribute_vocabulary_all.json / .md（--split train 另生成训练词表）
+step3_extract_attributes_online.py  无词表开放式提取（在线）→ extract_result.jsonl
+step3_extract_attributes_local.py   同一 prompt 的本地 Qwen 后端 → extract_result_local.jsonl
+step4_normalize_predicates.py       归一化及三类预算 → predicate_candidates.jsonl
 step5_judge_predicates_online.py    每实例 yes/no/unknown（在线）→ predicate_labels.jsonl
-step5_judge_predicates_local.py     同一 prompt 的本地 Qwen 版本 → predicate_labels_local.jsonl
+step5_judge_predicates_local.py     同一 prompt 的本地 Qwen 后端 → predicate_labels_local.jsonl
 step6_build_subsets.py              门禁 + 三值分区 → fine_grained_subsets.jsonl
-step7_visualize.py                 step6 正向子集可视化（每图一个子集）
-step8_review_sheet.py               本地浏览器审核 → decisions / final 子集
+step7_visualize.py                  step6 正向子集可视化（每图一个子集）
+step8_review_sheet.py               本地浏览器审核 → review_state / final 子集
 ```
 
 共享实现位于 `recsub/`；根目录的 `fix_jsonl_format.py` 与
-`convert_predicate_candidates.py` 是一次性数据修复脚本，不属于流水线步骤。
+`convert_predicate_candidates.py` 是独立的数据格式修复/迁移脚本，不属于流水线步骤。
 所有默认值集中在 `recsub/config.py`，命令行参数只覆盖单次运行。
 
 ## 首次准备
@@ -62,16 +62,17 @@ REC_PROVIDER=deepseek  → DeepSeek / deepseek-flash
 在线请求统一使用 Chat Completions 的三张 JPEG `image_url` data URL。默认关闭思考；需要时在命令行加 `--enable-thinking`
 。DeepSeek 使用官方视觉模型和 Chat Completions 接口时，保持当前消息格式，不要改成 Responses API 的 `input_image` 格式。
 
-`recsub/config.py` 的段落与消费者一一对应：`online`（在线端点与并发/重试/超时）、
-`local`（本地 Qwen 的模型与生成参数）、`paths`（全部产物路径）、`extract`（step3
-抽样与预览）、`crop`（三视图裁剪，全流程共用一套）、`vocabulary`、`normalize`、
-`judge`（step5 探针与恒定条件）、`gates`、`review`、`visualize`。
+`recsub/config.py` 的段落与消费者一一对应：顶层 `provider`/`api_key`/`base_url`/
+`model_name`/`image_dir`（在线端点）、`online`（并发/重试/超时与采样）、`local`
+（本地 Qwen 的模型与生成参数）、`paths`（全部产物路径）、`extract`（step3 抽样与
+预览）、`resume`（续跑指纹策略）、`crop`（三视图裁剪，全流程共用一套）、
+`vocabulary`、`normalize`、`gates`、`review`、`visualize`。
 
 所有脚本从项目根目录运行。Windows 控制台由脚本自动切换 UTF-8。
 
 ### 在线采样默认值
 
-`CONFIG["online"]["sampling"]` 按 provider 和思考模式设置，step3/step4 沿用官方默认；step5 仅对 Qwen 覆盖
+`CONFIG["online"]["sampling"]` 按 provider 和思考模式设置，step3 采用官方默认；step5 仅对 Qwen 覆盖
 `presence_penalty=0.0`，DeepSeek 不发送该覆盖。本地模型参数不变。
 
 | 模型 / 模式                    |    temperature |  top_p |  top_k | presence_penalty | repetition_penalty |
@@ -113,10 +114,20 @@ python step1_data_preprocess.py --limit-images 10 --output anno/instance_data_10
 ### 2. 标注词表
 
 ```bash
-python step2_build_vocabulary.py --split train
+# 全量词表（val/test 根使用）
+python step2_build_vocabulary.py --split all
+
+# 训练词表（train 根使用）
+python step2_build_vocabulary.py --split train \
+  --output anno/attribute_vocabulary_train.json \
+  --markdown anno/attribute_vocabulary_train.md
 ```
 
-默认只用 train 根，避免 val/test 的标注词泄漏。词表条目有：
+`--split` 默认 `all`，默认输出 `anno/attribute_vocabulary_all.json` 与
+`anno/attribute_vocabulary_all.md`。`--split train` 只统计训练根，避免 val/test 的
+标注词进入训练侧词表；用 `--output`/`--markdown` 写到单独的 train 文件。
+`--overrides` 默认指向 `anno/vocabulary_overrides_all.json`，训练词表需要另一份
+覆盖文件时也要显式指定。词表条目有：
 
 - `category / dimension / value`；
 - `verb`（例如 `walking` 与 `driving` 不混合）；
@@ -127,7 +138,7 @@ python step2_build_vocabulary.py --split train
 原始词归一化保持保守。含 `first/second/third/leftmost/rightmost/front row/number N`
 等场景相对词保留在统计中，但 step4 不会把它们当作「同类不相似」的补充候选。
 
-人工覆盖可创建 `anno/vocabulary_overrides.json`：
+人工覆盖可创建 `anno/vocabulary_overrides_all.json`：
 
 ```json
 {
@@ -150,13 +161,15 @@ python step2_build_vocabulary.py --split train
 }
 ```
 
-重新运行 step2 即可。`attribute_vocabulary.md` 是人工浏览版本。
+重新运行 step2 即可。`attribute_vocabulary_all.md` 是人工浏览版本；训练词表对应
+`attribute_vocabulary_train.md`。
 
 ### 3. 开放式提取（在线／本地）
 
 ```bash
-# 在线：先做小样本，默认每类别抽 2 个；0 表示全量
+# 在线：默认每类抽样 0（全量）；先用小样本试跑时显式传入抽样数
 python step3_extract_attributes_online.py --image-names 0000-fsc147-1106.jpg --no-enable-thinking
+python step3_extract_attributes_online.py --sample-per-category 2
 python step3_extract_attributes_online.py --sample-per-category 0
 
 # 本地：依赖 torch、accelerate、transformers、peft、bitsandbytes 和对应模型权重
@@ -164,7 +177,7 @@ python step3_extract_attributes_local.py --model-path F:/model/Qwen3.5-0.8B --sa
 accelerate launch step3_extract_attributes_local.py --model-path F:/model/Qwen3.5-0.8B --sample-per-category 0
 ```
 
-两个本地入口都在每张 GPU 上加载一份完整模型副本做数据并行推理：`--batch-size` 是
+step3 与 step5 的本地入口都在每张 GPU 上加载一份完整模型副本做数据并行推理：`--batch-size` 是
 每张 GPU 的 batch size，四进程配 `--batch-size 16` 时全局 batch 最多为 64；rank
 之间只通过 `gather_object` 汇总结果，只有主进程写文件。`--model-mode nf4` 是
 bitsandbytes NF4 4-bit 权重、按 `--dtype`（默认 bf16）计算；`--model-mode full`
@@ -181,8 +194,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --multi_gpu --num_processes 4 \
 PowerShell 请使用 `$env:CUDA_VISIBLE_DEVICES="0,1,2,3"` 后再运行
 `accelerate launch ...`；原生命令行的 `CUDA_VISIBLE_DEVICES=... command` 是 Bash
 语法。若要比较不同进程数的确定性输出，使用 `--no-do-sample`；采样模式默认开启，
-改变 rank 数会改变随机数流，不保证逐 token 一致。两个本地入口的续跑指纹都绑定
-进程数及每卡 batch；改变后建议指定新的 `--output`，以免混用结果。CUDA 集合通信推荐在
+改变 rank 数会改变随机数流，不保证逐 token 一致。两个本地入口（step3/step5）的
+续跑指纹都绑定进程数及每卡 batch；改变后建议指定新的 `--output`，以免混用结果。CUDA 集合通信推荐在
 Linux/WSL2 环境运行，不能仅通过修改 PowerShell 语法就保证原生 Windows 多卡可用。
 
 两端从 `recsub/prompts.py` 使用同一份提取文本与类别引导，提取 prompt **不包含
@@ -197,31 +210,31 @@ online/local 四个入口共用同一 cropper：Global 使用与下游
 JPEG base64、本地传 PIL/processor 输入，图像编码不是逐字节相同；本地 processor 还可能
 进行 patch 尺寸对齐，因此不保证最终模型 tensor 与下游任务完全相同。
 
-默认分别写 `anno/extract_result_online.jsonl` 与 `anno/extract_result_local.jsonl`。
+默认分别写 `anno/extract_result.jsonl`（在线）与 `anno/extract_result_local.jsonl`。
 成功记录带 `instance_id/image_name/caption/category/attributes`，失败记录带
 `failed: true` 和原因且不会被计为已完成。运行指纹是整次运行的常量，不逐行重复，
-而是旁挂一份 `anno/extract_result_*.jsonl.run.json`。step3/step5 在线和本地入口的续跑策略统一由
+而是旁挂一份 `anno/extract_result.jsonl.run.json` 或
+`anno/extract_result_local.jsonl.run.json`。step3/step5 在线和本地入口的续跑策略统一由
 `CONFIG["resume"]["check_fingerprint"]` 控制，默认 **False**：打印警告后继续，允许当前模型、
-prompt、裁剪、候选或实例表等配置与历史结果不同。成功 ID 仍跳过、失败 ID 仍重试。
+prompt、裁剪、候选或实例表等配置与已有结果不同。成功 ID 仍跳过、失败 ID 仍重试。
 
 - `--check-fingerprint`：显式启用严格检查，已有非空结果的指纹不同或标记缺失即拒绝续跑。
 - `--no-check-fingerprint`：显式跳过指纹检查（也是当前默认行为），但 **不跳过**结果 JSONL 格式、
-  现有记录结构或抽样清单校验；step5 探针模式也仍不能对部分结果续跑。
+  现有记录结构或抽样清单校验。
 - 跳过时不改写已有 `.run.json`（包括损坏标记），非空结果缺标记时也不补写。标记不代表
   混合结果中的每条记录都来自同一配置；需要配置可追溯的实验应启用检查并使用新的 `--output`。
-- 此次 Global 缩放改变输入及指纹；继续旧结果不会重算已成功的实例，文件可能包含新旧尺度的结果。
+- Global 视图的缩放参数同时进入输入和运行指纹；续跑只跳过已成功的实例，不会重算它们。
 
 ### 在线 batch 进度与逐条写入
 
-step3/step5 在线入口当前 `--batch-size` 默认 2000，表示每批提交的实例数；
-`--concurrency` 控制同时进行的 API 请求数（当前也为 2000），两者可分别覆盖。
+step3/step5 在线入口的 `--batch-size` 默认 2500，表示每批提交的实例数；
+`--concurrency` 控制同时进行的 API 请求数（默认也为 2500），两者可分别覆盖。
 每批显示独立的进度条，包含 batch 编号、完成数/总数、耗时和速度；
-尾部剩余不超过 5 条时显示 `pending_ids`，可据此定位拖慢该批的实例。
+批次末尾剩余不超过 5 条时显示 `pending_ids`，可据此定位拖慢该批的实例。
 
 普通提取/判断每返回一条结果，就立即追加一行 JSONL 并 flush，不必等整批完成；
 进度在该条写入后更新，输出顺序是完成顺序而非 `instance_id` 顺序。
-step5 的探针轮也显示进度，但最终标签需等探针剪枝完成后才能写入；
-探针后的其余实例仍逐条即时写入。逐行 flush 不等于每条执行 `fsync`。
+逐行 flush 不等于每条执行 `fsync`。
 
 八卡 Bash/Linux 续跑示例（保留已有模型路径和生成参数，按需补充）：
 
@@ -258,36 +271,33 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --multi_gpu --num_process
 `--no-enable-thinking` 用于实测成本/质量消融，不预设关闭后一定更好。抽样清单、prompt 预览
 按后端分开保存；续跑时先从完整数据抽相同样本，再排除成功 ID。
 
-如果手上是记录数组形式的 JSON 提取产物（例如 `exp/` 下已有的实验结果），先转换到
-独立 JSONL，再指定 step4 输入：
+如果提取产物是记录数组形式的 JSON，先转换成一行一条的 JSONL，再指定 step4 输入：
 
 ```bash
-python -m recsub.io migrate --from exp/exp_local_qwen35_2B/result.json --to anno/extract_result_imported_local.jsonl --expect-count 286621
-python step4_normalize_predicates.py --input anno/extract_result_imported_local.jsonl --no-embedding --no-llm-tail
+python -m recsub.io migrate --from path/to/result.json --to anno/extract_result_imported_local.jsonl
+python step4_normalize_predicates.py --input anno/extract_result_imported_local.jsonl --no-embedding
 ```
 
 这类记录只有 `instance_id` 和属性，step4 会按 `instance_id` 与完整
 `anno/instance_data.jsonl` 归并配对。它们的字段与 step3 的产物不同，因此不能与
-新格式的结果混在同一个文件里，也不能当作 step3 的续跑文件。
+step3 的结果混在同一个文件里，也不能当作 step3 的续跑文件。
 
 ### 4. 归一化与根级候选预算
 
 ```bash
-python step4_normalize_predicates.py                 # 默认无 LLM tail
-python step4_normalize_predicates.py --llm-tail      # 启用 LLM 尾部来生成新谓词
+python step4_normalize_predicates.py
 ```
 
-多卡可用独立并行入口按完整图片分片（关闭 LLM tail）：
+多卡可用独立并行入口按完整图片分片：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 python step4_normalize_predicates_parallel.py \
-  --gpus 0,1,2,3 --input anno/extract_result_local.jsonl --no-llm-tail
+  --gpus 0,1,2,3 --input anno/extract_result_local.jsonl
 ```
 
-每张卡启动一个 step4 进程，候选结果与生成词表在所有 worker 成功后合并；失败时会保留
-临时分片和日志。默认成功后删除临时文件，可传 `--keep-temp` 保留。该入口当前不支持
-`--llm-tail`，因为 tail 批次和类别级生成上限会因分片而变化。Windows PowerShell 可先设置
-`$env:CUDA_VISIBLE_DEVICES="0,1,2,3"` 再运行 Python 命令。
+每张卡启动一个 step4 进程，候选结果在所有 worker 成功后合并；失败时会保留
+临时分片和日志。默认成功后删除临时文件，可传 `--keep-temp` 保留。
+Windows PowerShell 可先设置 `$env:CUDA_VISIBLE_DEVICES="0,1,2,3"` 再运行 Python 命令。
 
 step4 按 `anno/splits.json` 的 `(图片名, caption)` 根选择归一化词表：训练集使用
 `anno/attribute_vocabulary_train.json`，val/test 共用 `anno/attribute_vocabulary_all.json`。
@@ -297,7 +307,7 @@ step4 按 `anno/splits.json` 的 `(图片名, caption)` 根选择归一化词表
 python step4_normalize_predicates.py --input anno/extract_result_local.jsonl \\
   --vocabulary anno/attribute_vocabulary_train.json \\
   --vocabulary-all anno/attribute_vocabulary_all.json --splits anno/splits.json \\
-  --no-embedding --no-llm-tail
+  --no-embedding
 ```
 
 每个待处理根必须恰好属于 train/val/test 之一；未列入划分或重复划分会报错。切换词表策略后，
@@ -308,14 +318,13 @@ step4 先按根对开放短语做字符串与向量去重，再在当前根对�
 合并后以最多 256 条为一批编码，图片处理完清理临时向量（即使提取文件乱序也按图归并）。
 如果入选候选与同图其他 caption 的原标注/开放属性 **字符串相同**（忽略大小写、
 空白和首尾标点），会打印并丢弃该候选，在根的 `dropped` 中记下 ID、原因及
-匹配到的其他 caption；语义向量相似只打印提醒，不改变候选。候选按 **同类相似词表词 → 跨类别相似词表词 → 同类不相似词表词 →
-LLM 尾部**的顺序
-分配预算。默认每根最多 30 个（`CONFIG["normalize"]["max_candidates_per_root"]`），
+匹配到的其他 caption；语义向量相似只打印提醒，不改变候选。候选按 **同类相似词表词 → 跨类别相似词表词 → 同类不相似词表词**
+的顺序分配预算。默认每根最多 30 个（`CONFIG["normalize"]["max_candidates_per_root"]`），
 可用 `--max-candidates-per-root N` 覆盖，`0` 表示不发送候选；候选预算只此一处。
 跨类别候选沿用其原词表
 `predicate_id` 与 `category`（来源类别），根对象的 `category` 仍是目标类别。
 同类不相似词表词只表示“值得问”，没有开放提取证据，不能预先当成 `no`。
-内部选词时保留优先级与预算排名，紧凑输出只保留四类候选和字符串重复的
+内部选词时保留优先级与预算排名，紧凑输出只保留三类候选和字符串重复的
 `dropped`；移除字符串重复候选后不会再从预算外补位。
 本地结果可显式指定：
 
@@ -324,11 +333,11 @@ python step4_normalize_predicates.py --input anno/extract_result_local.jsonl \
   --max-candidates-per-root 30
 ```
 
-`white laces` 不会因为与 `white` 相似就被吃掉；它被识别为细化，交给尾部决定是
-生成新的可复用谓词还是丢弃。`outside the blister pack`、`near a blister pack`
-不会再误合并进 `in the blister pack`。
+`white laces` 不会因为与 `white` 相似就被吃掉；它被识别为细化，保留为未解析短语。
+`outside the blister pack`、`near a blister pack` 不会再误合并进
+`in the blister pack`。
 
-候选格式按图片/caption 保存四类候选（step5/6 会自动展平）：
+候选格式按图片/caption 保存三类候选（step5/6 会自动展平）：
 
 ```json
 {
@@ -337,22 +346,17 @@ python step4_normalize_predicates.py --input anno/extract_result_local.jsonl \
   "candidates": {
     "same_category_similar": [{"predicate_id": "person/action/sitting", "display": "sitting", "dimension": "action", "value": "sitting"}],
     "cross_category_similar": [],
-    "same_category_dissimilar": [],
-    "llm_tail": []
+    "same_category_dissimilar": []
   },
   "dropped": [{"predicate_id": "person/color/blue", "phrase": "blue", "reason": "cross_caption_string_duplicate", "detail": "'blue person' 的属性 'blue'"}]
 }
 ```
-
-LLM 新造的谓词另存 `vocabulary_generated.json`，可直接做「仅原词表」与「加生成词」
-的消融。
 
 ### 5. 三值判断
 
 ```bash
 # 在线
 python step5_judge_predicates_online.py --no-enable-thinking
-python step5_judge_predicates_online.py --probe-per-caption 6 --no-enable-thinking
 
 # 本地：4 卡、每卡最多 16 个实例；先以较小 batch 验证显存
 CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --multi_gpu --num_processes 4 \
@@ -371,13 +375,11 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --multi_gpu --num_processes 4 \
 `unknown`。调用/解析/裁剪失败写 `judgment_failed: true`，不计入完成集合，重跑自动
 重试。
 
-step5 使用 step4 每根的 `predicates` 列表逐实例判断；候选文件改变（包括预算、词表或输入
+step5 使用 step4 每根的 `candidates` 列表逐实例判断；候选文件改变（包括预算、词表或输入
 版本）时必须使用新的标签输出路径。运行指纹写在输出旁的旁挂标记
 `anno/predicate_labels.jsonl.run.json` 里（一次运行一个值，逐行重复没有意义），
 续跑时比对标记，不符或有记录却缺标记都会报错，不会静默复用其他候选的已完成实例；
-删除标记等于放弃续跑。`--probe-per-caption` 在已有部分结果后不会重算剪枝，
-需新建输出文件。被探针剪掉的「根 × 恒定条件」写入
-`anno/predicate_constant.json`（本地为 `predicate_constant_local.json`）。
+删除标记等于放弃续跑。
 
 ### 6. 门禁与三值子集
 
@@ -450,33 +452,62 @@ caption、新增用于划分子集的属性都显示在图片右侧；图片标�
 ### 8. 本地单人浏览器审核
 
 ```bash
-# 从 image_idx=0 开始；首次运行自动构建条目、启动 loopback 浏览器并打开审核页
+# 首次运行自动构建条目，从 image_idx=0 开始审核
 python step8_review_sheet.py
 
-# 从指定原始图片索引开始（image_idx 来自 step1 实例表）
+# 本次只审核 image_idx=1000～1999；区间左闭右开，导航不会越界
+python step8_review_sheet.py --start 1000 --end 2000
+
+# 后续使用已构建条目，恢复同一区间的审核状态
+python step8_review_sheet.py --serve --start 1000 --end 2000
+
+# 只设置初始游标：从 120 开始，但不限制向前/向后浏览的范围
 python step8_review_sheet.py --image-idx 120
 
-# 可选：只构建审核条目与 CSV，不启动界面
+# 可选：只构建全量审核条目与 CSV，不启动界面
 python step8_review_sheet.py --build
 ```
 
-界面一次展示一个子集，原图右侧使用大号粗体、不同强调色的信息卡展示**原始类别、原始 caption、新增划分属性**，
-并直接显示 yes/no/unknown 数量、框选点数和保留/废弃状态；完整 JSON 默认折叠在“查看技术详情”中。
-顶部同时显示 source `image_idx`、图片名和当前审核进度。`image_idx` 是 step1 按原始图片顺序从 0 开始编号的索引；如果指定索引没有子集，则从后续第一个有可审子集的图片开始。← / → 或
-A / D 切换上一/下一子集，不改变保留状态；空格显式废弃当前子集并前进。右侧状态横幅用黄色“未审核 · 默认保留”、绿色“已审核 · 保留”或红色“已审核 · 已废弃”区分审核进度和去留。没有废弃记录的子集
-默认保留。鼠标拖框结束后会立即将所选 yes/no 点各翻转一次，不需要额外点击；如果还要再次翻转，可点“手动翻转所选 yes/no”。快捷键 W 将框选点全部设为 yes，S 全部设为 no；两个操作也会把框选到的 unknown 设为指定标签。状态和点标签每次变更立即追加保存到
-`review/review_state.jsonl`，首次启动时该文件不存在也可正常审核，首次保存更改会自动创建；已有文件不会被清空，
-中断后再次运行会恢复审核状态。关闭进程时会导出最终数据，界面中的
-“保存最终子集”按钮也可随时导出；最终文件默认为 `anno/fine_grained_subsets_final.jsonl`，
-只排除显式废弃的子集，并将人工修改后的 yes/no/unknown 实例分区写回。
+`--start` 默认 0，`--end` 默认不限；索引必须非负，终点必须大于起点。如果指定起点没有子集，
+则从区间内后续第一个有可审子集的图片开始；空区间会报错，不启动页面。
+`--image-idx` 仅指定初始游标，默认使用本次区间起点；与区间参数同时使用时，游标必须在区间内。
 
-服务只绑定 `127.0.0.1`，是单机单人界面；不提供 reviewer、分片或多人合并流程。可用
+界面一次展示一个子集，原图右侧使用大号粗体、不同强调色的信息卡展示**原始类别、原始 caption、新增划分属性**，
+并直接显示 yes/no/unknown 数量、框选点数和审核状态；完整 JSON 默认折叠在“查看技术详情”中。
+顶部显示本次审核区间、source `image_idx`、图片名和子集进度。`image_idx` 来自 step1，按原始图片顺序从 0 编号。
+同一图片的多个子集全部纳入区间，但**每个子集独立保存审核状态**，不会因同图某一子集已审核而跳过其他待审核子集。
+
+| 状态 | 界面区分 | 含义 |
+| --- | --- | --- |
+| `pending` | 灰色虚线，○ 未审核 · 暂按默认保留 | 尚未人工确认，不能算作已审核保留 |
+| `keep` | 绿色实线，✓ 已审核 · 已确认保留 | 点击“确认保留”或在普通未审核条目上修改点标签 |
+| `discard` | 红色实线，✕ 已审核 · 已废弃 | 显式废弃，不进入最终数据 |
+| `unknown` | 蓝色实线，？ 不确定 · 待二次审核 | 点击“不确定”，保存后留在当前子集 |
+
+← / → 或 A / D 切换上一/下一子集，不改变状态；空格显式废弃当前子集并前进。
+**“跳过已审核”**从下一子集向后扫描，跳过明确保留/废弃，停在下一条 unknown 或未审核子集；不绕回，
+无后续待审核条目时提示并保留当前位置，也不会修改被跳过的条目。
+unknown 后继续编辑点标签仍保持 unknown，直到点击“确认保留”或“废弃”。
+
+鼠标拖框结束后立即将所选 yes/no 点各翻转一次；可点“手动翻转所选 yes/no”再次翻转。
+W 将框选点全部设为 yes，S 全部设为 no；这两个操作也会把框选到的点级 unknown 设为指定标签。
+**审核状态 unknown 与实例点的 unknown 分区相互独立**，“不确定”按钮不修改实例标签。
+状态和点标签每次变更立即追加保存到 `review/review_state.jsonl`，首次保存自动创建文件；已有文件不会被清空。
+状态行优先使用显式 `status`；没有 `status` 时按 `discard`/`reviewed`/`labels` 推断，
+中断后再次运行会恢复审核状态。
+
+关闭进程时会导出最终数据，“保存最终子集”也可随时导出，默认为 `anno/fine_grained_subsets_final.jsonl`。
+**分段审核仍基于完整输入条目导出，保留区间外的已有结果**；只排除显式废弃的子集，并写回修改后的实例分区。
+未审核子集按默认保留策略导出，`review.status="keep"`、`review.defaulted=true`、`review.reviewed=false`；
+不确定子集也暂保留，但明确记录 `review.status="unknown"`、`review.defaulted=false`、`review.reviewed=false`，供二次审核使用，不能视为已确认保留。
+
+服务默认只绑定 `127.0.0.1`（`CONFIG["review"]["host"]`），是单机单人界面；不提供 reviewer、分片或多人合并流程。可用
 `--instances`、`--image-dir`、`--review-dir`、`--state` 和 `--final-output` 覆盖输入输出路径。
 
 ## 重要边界
 
-- 词表默认只从 train 构建；人工审核/伪标签增强只作用于训练侧。原始 REC-8K 的
-  val/test 查询与分布不能因为「容易划分」而删除。
+- 训练侧使用 `--split train` 构建的词表，val/test 根使用全量词表；人工审核/伪标签
+  增强只作用于训练侧。原始 REC-8K 的 val/test 查询与分布不能因为「容易划分」而删除。
 - `unknown` 不能补成 `no`；判断失败不能补成 `unknown`。
 - 子集之间默认允许重叠；互补预测只能使用一条谓词的 yes/no 分区，不能把多个
   重叠子集的计数相加。

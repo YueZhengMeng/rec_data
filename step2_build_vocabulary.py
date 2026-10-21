@@ -3,13 +3,14 @@
 词表是整条链的上游产物：step4 用它把候选词归一化到槽位，扫「仅原词表 vs 加生成
 谓词」的消融也以它作为基线。
 
-默认**只用 train 划分**构建，避免 val/test 的标注词进入提示词。取值至少覆盖
-``--min-root-count`` 个根才收录，默认 1 表示全部收录。
+默认 ``--split all``，输出 val/test 共用的全量词表；传 ``--split train`` 可只统计
+训练根，避免 val/test 的标注词进入训练侧词表。取值至少覆盖 ``--min-root-count``
+个根才收录，默认 1 表示全部收录。
 
-产物三个：
-- ``anno/attribute_vocabulary.json``：程序读取的词表
-- ``anno/attribute_vocabulary.md``：人工浏览用
-- ``anno/vocabulary_overrides.json``：可选。人工改名/合并/删除/加别名，
+默认产物与可选覆盖文件：
+- ``anno/attribute_vocabulary_all.json``：程序读取的词表
+- ``anno/attribute_vocabulary_all.md``：人工浏览用
+- ``anno/vocabulary_overrides_all.json``：可选输入，人工改名/合并/删除/加别名，
   加载时合并，**不用改代码**。格式示例：
 
       {
@@ -20,7 +21,9 @@
       }
 
     python step2_build_vocabulary.py
-    python step2_build_vocabulary.py --split train --min-root-count 3
+    python step2_build_vocabulary.py --split train \
+        --output anno/attribute_vocabulary_train.json \
+        --markdown anno/attribute_vocabulary_train.md
 """
 
 from __future__ import annotations
@@ -57,7 +60,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="人工覆盖文件；不存在则跳过")
     parser.add_argument("--split", default=CONFIG["vocabulary"]["split"],
                         choices=("train", "val", "test", "all"),
-                        help="只用该划分构建词表，默认 train")
+                        help="只用该划分构建词表，默认 all")
     parser.add_argument("--min-root-count", type=int,
                         default=CONFIG["vocabulary"]["min_root_count"],
                         help="取值至少覆盖这么多根才收录")

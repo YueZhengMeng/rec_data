@@ -1,13 +1,11 @@
-"""Shared loading and rendering for step7 visualization and step8 review.
+"""step7 子集可视化的加载与渲染。
 
-The step6 file contains one caption root with coordinates followed by subset nodes
-that refer to stable instance IDs.  This module resolves those IDs once and keeps
-the image layout identical in the batch visualizer and the browser reviewer.
+step6 文件先给出一条 caption root 及其坐标，随后是引用稳定 instance ID 的子集
+节点。本模块把这些 ID 解析成坐标，并按同一套布局逐个渲染子集。
 """
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -17,14 +15,11 @@ from recsub.io import iter_jsonl
 
 POSITIVE_MARKER = (181, 31, 50)
 OTHER_MARKER = (25, 158, 112)
-# Legacy import name; current subset membership is encoded by a red cross.
-YES = OTHER_MARKER
 PAGE_BACKGROUND = (249, 249, 247)
 SIDEBAR_BACKGROUND = (252, 252, 251)
 BORDER = (220, 220, 215)
 PRIMARY = (15, 15, 15)
 SECONDARY = (75, 75, 75)
-MUTED = (120, 120, 120)
 TITLE_HEIGHT = 62
 MARGIN = 20
 PANEL_GAP = 18
@@ -64,26 +59,15 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, width: int,
     return lines or ["—"]
 
 
-def fit_text(draw: ImageDraw.ImageDraw, text: str, width: int,
-             text_font: ImageFont.ImageFont) -> str:
-    """Return one-line text that fits a sidebar field."""
-    if draw.textlength(text, font=text_font) <= width:
-        return text
-    while text and draw.textlength(text + "…", font=text_font) > width:
-        text = text[:-1]
-    return text + "…"
-
-
 def _key(node: Mapping[str, Any]) -> tuple[str, str]:
     return str(node["image_name"]), str(node["caption"])
 
 
-def load_subset_nodes(annotations_path: str | Path, *, positive_only: bool = True) -> list[dict]:
-    """Load step6 subset nodes and resolve coordinates from caption roots.
+def load_subset_nodes(annotations_path: str | Path) -> list[dict]:
+    """读取 step6 的正向子集，并从 caption root 解析实例坐标。
 
-    ``positive_only`` excludes complements and negative-polarity nodes.  Roots are
-    never returned.  The returned dictionaries are detached copies safe to enrich
-    with ``yes_points``/``no_points``/``unknown_points`` by callers.
+    互补节点和 negative 极性节点会被排除，根节点不返回。返回的是脱离原记录的
+    副本，调用方可以安全地补充 ``yes_points``/``no_points``/``unknown_points``。
     """
     roots: dict[tuple[str, str], dict[int, Sequence[float]]] = {}
     subsets: list[dict] = []
@@ -98,7 +82,7 @@ def load_subset_nodes(annotations_path: str | Path, *, positive_only: bool = Tru
         if kind != "predicate_subset":
             continue
         predicate = raw.get("predicate") or {}
-        if positive_only and (raw.get("complement_of") or predicate.get("polarity") == "negative"):
+        if raw.get("complement_of") or predicate.get("polarity") == "negative":
             continue
         subsets.append(dict(raw))
 
@@ -160,16 +144,14 @@ def _draw_field(draw: ImageDraw.ImageDraw, x: int, y: int, label: str, value: An
 
 
 def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: int = 1,
-                  mode: str = "positive", max_width: int = 1100,
+                  max_width: int = 1100,
                   max_height: int = 850, sidebar_width: int = 520) -> Image.Image:
     """Render exactly one subset with its metadata in a right-hand sidebar.
 
-    Both ``positive`` and ``review`` use red crosses for the current subset and
-    green dots for the remaining instances of the same caption root.  These are
-    display groups only: unknown labels are not rewritten as no.
+    Red crosses mark the current subset and green dots mark the remaining
+    instances of the same caption root.  These are display groups only:
+    unknown labels are not rewritten as no.
     """
-    if mode not in {"positive", "review"}:
-        raise ValueError("mode 必须是 positive 或 review")
     source = image.convert("RGB")
     scale = min(max_width / source.width, max_height / source.height, 3.0)
     displayed = source.resize((max(1, round(source.width * scale)),
@@ -189,9 +171,6 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
         ("子集正样本数（红叉）", len(node.get("instance_ids", node.get("yes_ids", ()))), False, None),
         ("同根其余实例数（绿点）", len(other_points), False, None),
     ]
-    if mode == "review":
-        review = node.get("review") or {}
-        fields.append(("审核状态", review.get("status", "pending"), False, None))
     sidebar_text_width = sidebar_width - 32
     measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     estimated_text_height = sum(
@@ -218,8 +197,8 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
     canvas.paste(displayed, origin)
     draw.rectangle((origin[0] - 1, origin[1] - 1,
                     origin[0] + displayed.width, origin[1] + displayed.height), outline=BORDER)
-    # Older review_items.jsonl stored only the complete no/unknown partitions.
-    # New items use the exact root-minus-subset coordinates supplied by the loader.
+    # other_points 是加载器算出的「根实例集减去当前子集」坐标；缺失时回退到
+    # no + unknown 两个分区。
     for point in other_points:
         _draw_point(draw, point, scale, OTHER_MARKER, 5, origin)
     for point in node.get("yes_points", ()):
@@ -234,16 +213,3 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
         cursor = _draw_field(draw, text_x, cursor, label, value, sidebar_text_width,
                              prominent=prominent, accent=accent)
     return canvas
-
-
-def render_subset_png(image_path: str | Path, node: Mapping[str, Any], *, subset_index: int = 1,
-                      mode: str = "positive", max_width: int = 1100,
-                      max_height: int = 850, sidebar_width: int = 520) -> bytes:
-    """Render one subset to PNG bytes for the review server."""
-    with Image.open(image_path) as image:
-        rendered = render_subset(image, node, subset_index=subset_index, mode=mode,
-                                 max_width=max_width, max_height=max_height,
-                                 sidebar_width=sidebar_width)
-    output = io.BytesIO()
-    rendered.save(output, format="PNG", optimize=True)
-    return output.getvalue()
