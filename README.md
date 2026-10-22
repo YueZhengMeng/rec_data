@@ -479,35 +479,100 @@ python step8_review_sheet.py --build
 
 | 状态 | 界面区分 | 含义 |
 | --- | --- | --- |
-| `pending` | 灰色虚线，○ 未审核 · 暂按默认保留 | 尚未人工确认，不能算作已审核保留 |
-| `keep` | 绿色实线，✓ 已审核 · 已确认保留 | 点击“确认保留”或在普通未审核条目上修改点标签 |
+| `pending` | 灰色虚线，○ 未审核 · 不导出结果 | 尚未完成审核，仅展示或跳过不算审核操作 |
+| `keep`，`defaulted=true` | 绿色实线，✓ 已审核 · 默认保留 | 审核人员查看后按 D / →，接受原标签并进入下一条 |
+| `keep`，`defaulted=false` | 绿色实线，✓ 已审核 · 已确认保留 | 点击“确认保留”或在普通未审核条目上修改点标签 |
 | `discard` | 红色实线，✕ 已审核 · 已废弃 | 显式废弃，不进入最终数据 |
 | `unknown` | 蓝色实线，？ 不确定 · 待二次审核 | 点击“不确定”，保存后留在当前子集 |
 
-← / → 或 A / D 切换上一/下一子集，不改变状态；空格显式废弃当前子集并前进。
-**“跳过已审核”**从下一子集向后扫描，跳过明确保留/废弃，停在下一条 unknown 或未审核子集；不绕回，
+**→ / D** 先将当前未审核子集保存为“已审核 · 默认保留”（`status="keep"`、`reviewed=true`、`defaulted=true`），
+保存成功后才前进；保存失败停留原处。下一条尚未审核的子集仍为 pending，不会提前标记已审核。
+在区间最后一条按 D / → 也会保存审核结果，但不越界。← / A 只返回上一子集，不改变状态；空格显式废弃当前子集并前进。
+已有保留、废弃或 unknown 状态不会因按 D / → 被覆盖；点击“确认保留”会改为明确保留并清除默认保留标记。
+**“跳过已审核”**从下一子集向后扫描，跳过所有已审核保留（包括按下一条默认保留）/废弃，停在下一条 unknown 或未审核子集；不绕回，
 无后续待审核条目时提示并保留当前位置，也不会修改被跳过的条目。
 unknown 后继续编辑点标签仍保持 unknown，直到点击“确认保留”或“废弃”。
 
 鼠标拖框结束后立即将所选 yes/no 点各翻转一次；可点“手动翻转所选 yes/no”再次翻转。
 W 将框选点全部设为 yes，S 全部设为 no；这两个操作也会把框选到的点级 unknown 设为指定标签。
 **审核状态 unknown 与实例点的 unknown 分区相互独立**，“不确定”按钮不修改实例标签。
-状态和点标签每次变更立即追加保存到 `review/review_state.jsonl`，首次保存自动创建文件；已有文件不会被清空。
-状态行优先使用显式 `status`；没有 `status` 时按 `discard`/`reviewed`/`labels` 推断，
-中断后再次运行会恢复审核状态。
+状态和点标签每次变更立即保存到 `review/review_state.jsonl`，首次保存自动创建文件。
+文件按 `review_id` 保存**最新状态快照**，同一子集只有一条记录，重复审核会替换旧结果，而不是追加历史行。
+写入采用临时文件、fsync 和原子替换，成功后才更新内存；写入失败不推进审核，也不覆盖之前的状态。
+仅保存经过操作的 keep/unknown/discard，pending 不写入状态文件；废弃记录保留在状态文件中，以便恢复和跳过。
+状态行优先使用显式 `status`；没有 `status` 时按 `discard`/`reviewed`/`labels` 推断。
+已有追加式日志仍可读取，同一 ID 取最后一条；下次成功保存、手动导出或正常退出时自动整理为唯一记录，
+若最后一条为 pending 则移除该记录，不会恢复其更早的保留决策。仅启动/展示页面不重写已有文件。
 
 关闭进程时会导出最终数据，“保存最终子集”也可随时导出，默认为 `anno/fine_grained_subsets_final.jsonl`。
-**分段审核仍基于完整输入条目导出，保留区间外的已有结果**；只排除显式废弃的子集，并写回修改后的实例分区。
-未审核子集按默认保留策略导出，`review.status="keep"`、`review.defaulted=true`、`review.reviewed=false`；
-不确定子集也暂保留，但明确记录 `review.status="unknown"`、`review.defaulted=false`、`review.reviewed=false`，供二次审核使用，不能视为已确认保留。
+**只导出经过审核操作且当前为 keep/unknown 的子集**，没有操作的 pending 和已废弃的 discard 不进入最终子集文件。
+按 D / → 接受的条目属于已操作子集，正常导出为 `review.status="keep"`、`review.defaulted=true`、`review.reviewed=true`；
+明确确认保留或修改点标签的条目同样导出。不确定条目标记 `review.status="unknown"`、`review.defaulted=false`、`review.reviewed=false`，留待二次审核。
+分段审核仍检查完整输入集合与全量审核状态，保留其他区间**已经操作过**的结果，不补入未审核条目。
+每次导出按 `review_id` 去重并原子重建文件，同一子集只保留最新状态和点标签，不会残留先前已被废弃的旧行；
+同图不同子集独立保留。导出提示同时显示已操作保留、废弃、未审核未导出的数量。
+审核准备文件 `review_items.jsonl` 和 CSV 仍包含完整待审核集合，它们是输入清单，不是审核结果。
+
+### 8.1 多人审核任务自动准备与版本校验
+
+如果由多名同学分工审核，先由负责人基于同一份 `subsets` 和 `instances` **只构建一次冻结任务包**：
+
+```bash
+# 生成 8 个任务：review_01=[0,1000)，review_02=[1000,2000)，……
+python step8_review_sheet.py --prepare-tasks 8 --images-per-task 1000 \
+  --review-dir review_batch
+```
+
+也可以指定起始图片索引：
+
+```bash
+python step8_review_sheet.py --prepare-tasks 8 --images-per-task 1000 \
+  --start 1000 --review-dir review_batch
+```
+
+准备命令只调用一次审核条目构建流程，然后复制同一份 `review_items.jsonl` 和 CSV 到每个任务目录，生成：
+
+```text
+review_batch/
+├── review_batch.json          # 批次总清单、dataset_id、8 个区间
+├── review_01/
+│   ├── review_manifest.json   # 任务 ID、区间、数量、清单 SHA-256、fingerprint
+│   ├── review_items.jsonl     # 与其他任务字节完全相同的冻结清单
+│   ├── review_sheet.csv
+│   ├── review_state.jsonl     # 审核后产生：本任务最新状态
+│   └── final_subsets.jsonl    # 审核后产生：本任务结果
+└── review_02/ … review_08/
+```
+
+每位同学只需要使用自己任务目录启动，不需要再提供 `subsets`、`instances` 或手动填写区间：
+
+```bash
+python step8_review_sheet.py --review-dir review_batch/review_02 \
+  --image-dir <本机图片目录>
+```
+
+程序发现 `review_manifest.json` 后会自动：
+
+- 读取任务目录中的冻结清单，不重新构建、不调用本机的上游数据；
+- 从 manifest 恢复该任务的 `[start, end)` 区间；
+- 校验 `review_items.jsonl` 的 SHA-256、`dataset_id`、`review_id` 唯一性、`image_idx` 映射、子集数量和任务 fingerprint；
+- 校验已有状态的 `review_id` 和实例标签属于当前任务；
+- 默认把状态和最终结果写回当前任务目录。
+
+因此，只要 8 个任务由同一次 `--prepare-tasks` 生成，8 位同学看到的 `review_id`、子集内容和图片索引就来自同一份冻结清单。
+即使有人修改了 `review_items.jsonl`、混入其他任务的状态、或使用了不同版本清单，启动时也会报错并且不会启动浏览器或覆盖结果。
+复制任务目录到其他电脑不会改变版本指纹；只需另行提供与 `image_name` 匹配的原图。任务仍按图片索引分配，区间内一张图片的多个子集归同一个任务，实际子集数量以启动前的任务统计为准。
+
+审核完成后，应将整个 `review_XX` 目录交回，而不是只交 `final_subsets.jsonl`。其中 `review_state.jsonl` 还包含废弃和 unknown，后续整合脚本可用 `review_id` 检查是否漏审、重复或冲突。不要让两位同学共享同一任务目录或同时写同一个状态文件。
+
+冻结任务目录不允许使用 `--build`、替换 `--items`、把 `--state` 或 `--final-output` 写到目录外。
+准备批次时，`--review-dir` 可以是不存在的新目录或已有空目录；非空目录（包括已有任务或审核结果）仍拒绝覆盖。
+请显式指定 `--review-dir review_batch`，否则使用配置中的默认 `review` 目录。
 
 服务默认只绑定 `127.0.0.1`（`CONFIG["review"]["host"]`），是单机单人界面；不提供 reviewer、分片或多人合并流程。可用
-`--instances`、`--image-dir`、`--review-dir`、`--state` 和 `--final-output` 覆盖输入输出路径。
+`--instances`、`--image-dir`、`--review-dir`、`--state` 和 `--final-output` 覆盖普通模式的输入输出路径。
 
 ## 重要边界
-
-- 训练侧使用 `--split train` 构建的词表，val/test 根使用全量词表；人工审核/伪标签
-  增强只作用于训练侧。原始 REC-8K 的 val/test 查询与分布不能因为「容易划分」而删除。
 - `unknown` 不能补成 `no`；判断失败不能补成 `unknown`。
 - 子集之间默认允许重叠；互补预测只能使用一条谓词的 yes/no 分区，不能把多个
   重叠子集的计数相加。

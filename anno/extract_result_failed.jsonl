@@ -1,0 +1,173 @@
+{"instance_id":759,"image_name":"0009-fsc147-1762.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1650,"output_tokens":103,"attempts":1}
+{"instance_id":1356,"image_name":"0014-fsc147-1922.jpg","caption":"blue bottle cap","category":"bottle cap","failed":true,"reason":"输出解析失败","input_tokens":1764,"output_tokens":89,"attempts":1}
+{"instance_id":798,"image_name":"0009-fsc147-1762.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1663,"output_tokens":42,"attempts":1}
+{"instance_id":2285,"image_name":"0033-fsc147-2496.jpg","caption":"brown lip stick","category":"lip stick","failed":true,"reason":"输出解析失败","input_tokens":1955,"output_tokens":22,"attempts":1}
+{"instance_id":2355,"image_name":"0035-fsc147-2517.jpg","caption":"yellow lip stick","category":"lip stick","failed":true,"reason":"输出解析失败","input_tokens":1864,"output_tokens":27,"attempts":1}
+{"instance_id":2217,"image_name":"0033-fsc147-2496.jpg","caption":"red lip stick","category":"lip stick","failed":true,"reason":"输出解析失败","input_tokens":1955,"output_tokens":33,"attempts":1}
+{"instance_id":2187,"image_name":"0032-fsc147-2468.jpg","caption":"yellow window frame","category":"window frame","failed":true,"reason":"输出解析失败","input_tokens":1989,"output_tokens":144,"attempts":1}
+{"instance_id":2265,"image_name":"0033-fsc147-2496.jpg","caption":"brown lip stick","category":"lip stick","failed":true,"reason":"输出解析失败","input_tokens":1955,"output_tokens":75,"attempts":1}
+{"instance_id":2897,"image_name":"0043-fsc147-2687.jpg","caption":"white go stone","category":"go stone","failed":true,"reason":"输出解析失败","input_tokens":1664,"output_tokens":45,"attempts":1}
+{"instance_id":3173,"image_name":"0046-fsc147-274.jpg","caption":"penguin on the beach","category":"penguin","failed":true,"reason":"输出解析失败","input_tokens":1666,"output_tokens":105,"attempts":1}
+{"instance_id":4442,"image_name":"0074-fsc147-3471.jpg","caption":"black bead","category":"bead","failed":true,"reason":"输出解析失败","input_tokens":1663,"output_tokens":31,"attempts":1}
+{"instance_id":4822,"image_name":"0082-fsc147-3606.jpg","caption":"box in the second top layer","category":"box","failed":true,"reason":"输出解析失败","input_tokens":1654,"output_tokens":98,"attempts":1}
+{"instance_id":6326,"image_name":"0119-fsc147-4128.jpg","caption":"white tile","category":"tile","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":32,"attempts":1}
+{"instance_id":7005,"image_name":"0119-fsc147-4128.jpg","caption":"gray tile","category":"tile","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":49,"attempts":1}
+{"instance_id":6978,"image_name":"0119-fsc147-4128.jpg","caption":"gray tile","category":"tile","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":101,"attempts":1}
+{"instance_id":8047,"image_name":"0128-fsc147-4407.jpg","caption":"white hot air balloon","category":"hot air balloon","failed":true,"reason":"输出解析失败","input_tokens":1927,"output_tokens":32,"attempts":1}
+{"instance_id":6881,"image_name":"0119-fsc147-4128.jpg","caption":"black tile","category":"tile","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":93,"attempts":1}
+{"instance_id":7176,"image_name":"0119-fsc147-4128.jpg","caption":"gray tile","category":"tile","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":9,"attempts":1}
+{"instance_id":13760,"image_name":"0238-fsc147-6208.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":100,"attempts":1}
+{"instance_id":13808,"image_name":"0238-fsc147-6208.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":78,"attempts":1}
+{"instance_id":13847,"image_name":"0239-fsc147-6209.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":51,"attempts":1}
+{"instance_id":13626,"image_name":"0236-fsc147-6203.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":47,"attempts":1}
+{"instance_id":13659,"image_name":"0237-fsc147-6207.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":95,"attempts":1}
+{"instance_id":13672,"image_name":"0237-fsc147-6207.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":125,"attempts":1}
+{"instance_id":13684,"image_name":"0237-fsc147-6207.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":87,"attempts":1}
+{"instance_id":14310,"image_name":"0243-fsc147-6221.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1850,"output_tokens":114,"attempts":2}
+{"instance_id":14491,"image_name":"0247-fsc147-6227.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":82,"attempts":2}
+{"instance_id":14433,"image_name":"0245-fsc147-6224.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1650,"output_tokens":45,"attempts":2}
+{"instance_id":14446,"image_name":"0245-fsc147-6224.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1650,"output_tokens":103,"attempts":2}
+{"instance_id":14534,"image_name":"0247-fsc147-6227.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":101,"attempts":2}
+{"instance_id":14523,"image_name":"0247-fsc147-6227.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":100,"attempts":2}
+{"instance_id":14562,"image_name":"0248-fsc147-6228.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1800,"output_tokens":97,"attempts":2}
+{"instance_id":14489,"image_name":"0247-fsc147-6227.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":72,"attempts":2}
+{"instance_id":14518,"image_name":"0247-fsc147-6227.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1600,"output_tokens":89,"attempts":2}
+{"instance_id":14747,"image_name":"0250-fsc147-6232.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":102,"attempts":1}
+{"instance_id":14693,"image_name":"0250-fsc147-6232.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":89,"attempts":1}
+{"instance_id":14745,"image_name":"0250-fsc147-6232.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":112,"attempts":1}
+{"instance_id":15145,"image_name":"0263-fsc147-6373.jpg","caption":"shoe on the front row","category":"shoe","failed":true,"reason":"输出解析失败","input_tokens":1803,"output_tokens":94,"attempts":1}
+{"instance_id":15091,"image_name":"0260-fsc147-6351.jpg","caption":"black high heel shoe","category":"high heel shoe","failed":true,"reason":"输出解析失败","input_tokens":1649,"output_tokens":54,"attempts":1}
+{"instance_id":15689,"image_name":"0270-fsc147-6522.jpg","caption":"yellow bead","category":"bead","failed":true,"reason":"输出解析失败","input_tokens":1625,"output_tokens":83,"attempts":1}
+{"instance_id":14674,"image_name":"0250-fsc147-6232.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":92,"attempts":1}
+{"instance_id":14739,"image_name":"0250-fsc147-6232.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":101,"attempts":1}
+{"instance_id":14728,"image_name":"0250-fsc147-6232.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":45,"attempts":1}
+{"instance_id":14686,"image_name":"0250-fsc147-6232.jpg","caption":"copper coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1825,"output_tokens":51,"attempts":1}
+{"instance_id":17994,"image_name":"0302-fsc147-6749.jpg","caption":"cap in the front two rows","category":"cap","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":49,"attempts":2}
+{"instance_id":17964,"image_name":"0301-fsc147-6748.jpg","caption":"filled pocket in the blister pack","category":"pocket","failed":true,"reason":"输出解析失败","input_tokens":1945,"output_tokens":75,"attempts":2}
+{"instance_id":17934,"image_name":"0301-fsc147-6748.jpg","caption":"filled pocket in the blister pack","category":"pocket","failed":true,"reason":"输出解析失败","input_tokens":1945,"output_tokens":66,"attempts":2}
+{"instance_id":17992,"image_name":"0302-fsc147-6749.jpg","caption":"cap in the front two rows","category":"cap","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":77,"attempts":2}
+{"instance_id":17015,"image_name":"0289-fsc147-6657.jpg","caption":"green pen","category":"pen","failed":true,"reason":"输出解析失败","input_tokens":1650,"output_tokens":95,"attempts":2}
+{"instance_id":19142,"image_name":"0319-fsc147-6788.jpg","caption":"nail polish in the top layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1654,"output_tokens":69,"attempts":1}
+{"instance_id":18895,"image_name":"0317-fsc147-6782.jpg","caption":"pill in the bottom row","category":"pill","failed":true,"reason":"输出解析失败","input_tokens":1566,"output_tokens":52,"attempts":1}
+{"instance_id":19005,"image_name":"0317-fsc147-6782.jpg","caption":"pill in the top row","category":"pill","failed":true,"reason":"输出解析失败","input_tokens":1566,"output_tokens":61,"attempts":1}
+{"instance_id":19460,"image_name":"0321-fsc147-6790.jpg","caption":"white car","category":"car","failed":true,"reason":"输出解析失败","input_tokens":1801,"output_tokens":80,"attempts":1}
+{"instance_id":18988,"image_name":"0317-fsc147-6782.jpg","caption":"pill in the top row","category":"pill","failed":true,"reason":"输出解析失败","input_tokens":1566,"output_tokens":58,"attempts":1}
+{"instance_id":18998,"image_name":"0317-fsc147-6782.jpg","caption":"pill in the top row","category":"pill","failed":true,"reason":"输出解析失败","input_tokens":1566,"output_tokens":73,"attempts":1}
+{"instance_id":20082,"image_name":"0331-fsc147-6823.jpg","caption":"sauce bottle on the top shelf","category":"sauce bottle","failed":true,"reason":"输出解析失败","input_tokens":1904,"output_tokens":44,"attempts":1}
+{"instance_id":20170,"image_name":"0332-fsc147-6826.jpg","caption":"lip stick in the highest row","category":"lip stick","failed":true,"reason":"输出解析失败","input_tokens":1441,"output_tokens":68,"attempts":1}
+{"instance_id":19751,"image_name":"0328-fsc147-6815.jpg","caption":"nail polish in the top layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1654,"output_tokens":54,"attempts":1}
+{"instance_id":21641,"image_name":"0352-fsc147-6881.jpg","caption":"black cassette","category":"cassette","failed":true,"reason":"输出解析失败","input_tokens":1650,"output_tokens":68,"attempts":1}
+{"instance_id":21123,"image_name":"0347-fsc147-6866.jpg","caption":"red book","category":"book","failed":true,"reason":"输出解析失败","input_tokens":1800,"output_tokens":74,"attempts":1}
+{"instance_id":21036,"image_name":"0346-fsc147-6865.jpg","caption":"red book","category":"book","failed":true,"reason":"输出解析失败","input_tokens":1650,"output_tokens":92,"attempts":1}
+{"instance_id":21774,"image_name":"0354-fsc147-6885.jpg","caption":"box containing kiwi fruit","category":"box","failed":true,"reason":"输出解析失败","input_tokens":1944,"output_tokens":77,"attempts":1}
+{"instance_id":21848,"image_name":"0356-fsc147-6888.jpg","caption":"black cap","category":"cap","failed":true,"reason":"输出解析失败","input_tokens":1800,"output_tokens":43,"attempts":1}
+{"instance_id":21979,"image_name":"0357-fsc147-6892.jpg","caption":"red stamp","category":"stamp","failed":true,"reason":"输出解析失败","input_tokens":1650,"output_tokens":124,"attempts":1}
+{"instance_id":22531,"image_name":"0365-fsc147-6907.jpg","caption":"cap in the fourth right column","category":"cap","failed":true,"reason":"输出解析失败","input_tokens":1945,"output_tokens":85,"attempts":1}
+{"instance_id":22812,"image_name":"0371-fsc147-6918.jpg","caption":"nail polish in the fifth top layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1605,"output_tokens":55,"attempts":1}
+{"instance_id":23171,"image_name":"0380-fsc147-6935.jpg","caption":"nail polish in the third top layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1905,"output_tokens":60,"attempts":1}
+{"instance_id":22832,"image_name":"0372-fsc147-6919.jpg","caption":"golden skateboard","category":"skateboard","failed":true,"reason":"输出解析失败","input_tokens":1800,"output_tokens":74,"attempts":1}
+{"instance_id":22804,"image_name":"0371-fsc147-6918.jpg","caption":"nail polish in the fifth top layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1605,"output_tokens":53,"attempts":1}
+{"instance_id":24213,"image_name":"0399-fsc147-6964.jpg","caption":"blue sticker","category":"sticker","failed":true,"reason":"输出解析失败","input_tokens":1800,"output_tokens":101,"attempts":1}
+{"instance_id":25606,"image_name":"0420-fsc147-7010.jpg","caption":"lip stick in the first top row","category":"lip stick","failed":true,"reason":"输出解析失败","input_tokens":1605,"output_tokens":72,"attempts":1}
+{"instance_id":25455,"image_name":"0418-fsc147-7002.jpg","caption":"book in the lowest layer","category":"book","failed":true,"reason":"输出解析失败","input_tokens":1653,"output_tokens":93,"attempts":1}
+{"instance_id":25597,"image_name":"0420-fsc147-7010.jpg","caption":"lip stick in the second top row","category":"lip stick","failed":true,"reason":"输出解析失败","input_tokens":1605,"output_tokens":42,"attempts":1}
+{"instance_id":25441,"image_name":"0418-fsc147-7002.jpg","caption":"book in the highest layer","category":"book","failed":true,"reason":"输出解析失败","input_tokens":1653,"output_tokens":46,"attempts":1}
+{"instance_id":25225,"image_name":"0414-fsc147-6995.jpg","caption":"cartridge in slanted position","category":"cartridge","failed":true,"reason":"输出解析失败","input_tokens":1653,"output_tokens":98,"attempts":1}
+{"instance_id":25468,"image_name":"0418-fsc147-7002.jpg","caption":"book in the lowest layer","category":"book","failed":true,"reason":"输出解析失败","input_tokens":1653,"output_tokens":104,"attempts":1}
+{"instance_id":25476,"image_name":"0418-fsc147-7002.jpg","caption":"book in the lowest layer","category":"book","failed":true,"reason":"输出解析失败","input_tokens":1653,"output_tokens":51,"attempts":1}
+{"instance_id":25591,"image_name":"0420-fsc147-7010.jpg","caption":"lip stick in the second top row","category":"lip stick","failed":true,"reason":"输出解析失败","input_tokens":1605,"output_tokens":41,"attempts":1}
+{"instance_id":26018,"image_name":"0427-fsc147-7020.jpg","caption":"bottle on the bottom shelf","category":"bottle","failed":true,"reason":"输出解析失败","input_tokens":1878,"output_tokens":52,"attempts":1}
+{"instance_id":26003,"image_name":"0426-fsc147-7019.jpg","caption":"skateboard on the left wall","category":"skateboard","failed":true,"reason":"输出解析失败","input_tokens":1650,"output_tokens":85,"attempts":1}
+{"instance_id":26024,"image_name":"0427-fsc147-7020.jpg","caption":"bottle on the bottom shelf","category":"bottle","failed":true,"reason":"输出解析失败","input_tokens":1878,"output_tokens":93,"attempts":1}
+{"instance_id":26393,"image_name":"0435-fsc147-7037.jpg","caption":"cup in the first top row","category":"cup","failed":true,"reason":"输出解析失败","input_tokens":1654,"output_tokens":48,"attempts":1}
+{"instance_id":26566,"image_name":"0439-fsc147-7043.jpg","caption":"nail polish in the top layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1929,"output_tokens":51,"attempts":1}
+{"instance_id":27842,"image_name":"0456-fsc147-7095.jpg","caption":"bottle in the second top shelf","category":"bottle","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":77,"attempts":1}
+{"instance_id":27861,"image_name":"0456-fsc147-7095.jpg","caption":"bottle in the third top shelf","category":"bottle","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":79,"attempts":1}
+{"instance_id":27956,"image_name":"0459-fsc147-7100.jpg","caption":"milk bottle on the top shelf","category":"milk bottle","failed":true,"reason":"输出解析失败","input_tokens":1954,"output_tokens":194,"attempts":1}
+{"instance_id":28292,"image_name":"0462-fsc147-7104.jpg","caption":"red car","category":"car","failed":true,"reason":"输出解析失败","input_tokens":1942,"output_tokens":49,"attempts":1}
+{"instance_id":29620,"image_name":"0480-fsc147-7131.jpg","caption":"red key","category":"key","failed":true,"reason":"输出解析失败","input_tokens":1950,"output_tokens":71,"attempts":1}
+{"instance_id":28973,"image_name":"0470-fsc147-7115.jpg","caption":"car in vertical orientation","category":"car","failed":true,"reason":"输出解析失败","input_tokens":1928,"output_tokens":85,"attempts":1}
+{"instance_id":30562,"image_name":"0498-fsc147-7167.jpg","caption":"bluish pen","category":"pen","failed":true,"reason":"输出解析失败","input_tokens":1926,"output_tokens":112,"attempts":1}
+{"instance_id":31643,"image_name":"0513-fsc147-7216.jpg","caption":"stamp in the top two rows","category":"stamp","failed":true,"reason":"输出解析失败","input_tokens":1679,"output_tokens":122,"attempts":1}
+{"instance_id":31013,"image_name":"0510-fsc147-7212.jpg","caption":"white go stone","category":"go stone","failed":true,"reason":"输出解析失败","input_tokens":1651,"output_tokens":52,"attempts":1}
+{"instance_id":30994,"image_name":"0510-fsc147-7212.jpg","caption":"white go stone","category":"go stone","failed":true,"reason":"输出解析失败","input_tokens":1651,"output_tokens":63,"attempts":1}
+{"instance_id":31807,"image_name":"0519-fsc147-7225.jpg","caption":"cup in the first top row","category":"cup","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":82,"attempts":1}
+{"instance_id":31961,"image_name":"0521-fsc147-7227.jpg","caption":"cap in the first top two rows","category":"cap","failed":true,"reason":"输出解析失败","input_tokens":1805,"output_tokens":95,"attempts":1}
+{"instance_id":32263,"image_name":"0527-fsc147-7241.jpg","caption":"longer chopstick","category":"chopstick","failed":true,"reason":"输出解析失败","input_tokens":1601,"output_tokens":52,"attempts":1}
+{"instance_id":32927,"image_name":"0544-fsc147-7290.jpg","caption":"crayon in the middle row","category":"crayon","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":86,"attempts":1}
+{"instance_id":33111,"image_name":"0549-fsc147-7299.jpg","caption":"crayon in the first top row","category":"crayon","failed":true,"reason":"输出解析失败","input_tokens":1605,"output_tokens":83,"attempts":1}
+{"instance_id":33101,"image_name":"0549-fsc147-7299.jpg","caption":"crayon in the first top row","category":"crayon","failed":true,"reason":"输出解析失败","input_tokens":1605,"output_tokens":73,"attempts":1}
+{"instance_id":33027,"image_name":"0547-fsc147-7294.jpg","caption":"wine bottle on the second bottom shelf","category":"wine bottle","failed":true,"reason":"输出解析失败","input_tokens":1805,"output_tokens":98,"attempts":1}
+{"instance_id":33086,"image_name":"0548-fsc147-7296.jpg","caption":"can in the top row","category":"can","failed":true,"reason":"输出解析失败","input_tokens":2028,"output_tokens":117,"attempts":1}
+{"instance_id":32937,"image_name":"0544-fsc147-7290.jpg","caption":"crayon in the middle row","category":"crayon","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":97,"attempts":1}
+{"instance_id":33434,"image_name":"0556-fsc147-7321.jpg","caption":"cap on the third top shelf","category":"cap","failed":true,"reason":"输出解析失败","input_tokens":1879,"output_tokens":46,"attempts":1}
+{"instance_id":32932,"image_name":"0544-fsc147-7290.jpg","caption":"crayon in the middle row","category":"crayon","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":91,"attempts":1}
+{"instance_id":33632,"image_name":"0562-fsc147-7332.jpg","caption":"cap in the rightmost two columns","category":"cap","failed":true,"reason":"输出解析失败","input_tokens":1805,"output_tokens":45,"attempts":1}
+{"instance_id":33080,"image_name":"0548-fsc147-7296.jpg","caption":"can in the middle row","category":"can","failed":true,"reason":"输出解析失败","input_tokens":2028,"output_tokens":109,"attempts":1}
+{"instance_id":32930,"image_name":"0544-fsc147-7290.jpg","caption":"crayon in the middle row","category":"crayon","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":94,"attempts":1}
+{"instance_id":33369,"image_name":"0555-fsc147-7320.jpg","caption":"can in the bottom row","category":"can","failed":true,"reason":"输出解析失败","input_tokens":1803,"output_tokens":51,"attempts":1}
+{"instance_id":33677,"image_name":"0563-fsc147-7334.jpg","caption":"fruit box in the bottom layer","category":"fruit box","failed":true,"reason":"输出解析失败","input_tokens":1903,"output_tokens":85,"attempts":1}
+{"instance_id":33869,"image_name":"0568-fsc147-7342.jpg","caption":"stamp in the bottom two rows","category":"stamp","failed":true,"reason":"输出解析失败","input_tokens":1654,"output_tokens":136,"attempts":1}
+{"instance_id":33945,"image_name":"0570-fsc147-7347.jpg","caption":"nail polish in the third top layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1655,"output_tokens":53,"attempts":1}
+{"instance_id":34156,"image_name":"0573-fsc147-7353.jpg","caption":"box in the bottom layer","category":"box","failed":true,"reason":"输出解析失败","input_tokens":1944,"output_tokens":106,"attempts":1}
+{"instance_id":34350,"image_name":"0578-fsc147-7369.jpg","caption":"pen in the top right section","category":"pen","failed":true,"reason":"输出解析失败","input_tokens":1861,"output_tokens":96,"attempts":1}
+{"instance_id":34348,"image_name":"0578-fsc147-7369.jpg","caption":"pen in the top right section","category":"pen","failed":true,"reason":"输出解析失败","input_tokens":1861,"output_tokens":114,"attempts":1}
+{"instance_id":34343,"image_name":"0578-fsc147-7369.jpg","caption":"pen in the top right section","category":"pen","failed":true,"reason":"输出解析失败","input_tokens":1861,"output_tokens":68,"attempts":1}
+{"instance_id":34492,"image_name":"0583-fsc147-7380.jpg","caption":"silver coin","category":"coin","failed":true,"reason":"输出解析失败","input_tokens":1750,"output_tokens":74,"attempts":1}
+{"instance_id":34345,"image_name":"0578-fsc147-7369.jpg","caption":"pen in the top right section","category":"pen","failed":true,"reason":"输出解析失败","input_tokens":1861,"output_tokens":98,"attempts":1}
+{"instance_id":34762,"image_name":"0588-fsc147-7387.jpg","caption":"nail polish in the third bottom layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1655,"output_tokens":46,"attempts":1}
+{"instance_id":34766,"image_name":"0588-fsc147-7387.jpg","caption":"nail polish in the third bottom layer","category":"nail polish","failed":true,"reason":"输出解析失败","input_tokens":1655,"output_tokens":107,"attempts":1}
+{"instance_id":35608,"image_name":"0600-fsc147-7426.jpg","caption":"glasses in the third to fifth left columns","category":"glasses","failed":true,"reason":"输出解析失败","input_tokens":1931,"output_tokens":52,"attempts":1}
+{"instance_id":37250,"image_name":"0628-fsc147-7686.jpg","caption":"wine bottle on the topmost shelf","category":"wine bottle","failed":true,"reason":"输出解析失败","input_tokens":1930,"output_tokens":96,"attempts":1}
+{"instance_id":37809,"image_name":"0636-fsc147-820.jpg","caption":"yellow bottle cap","category":"bottle cap","failed":true,"reason":"输出解析失败","input_tokens":1900,"output_tokens":56,"attempts":1}
+{"instance_id":37777,"image_name":"0636-fsc147-820.jpg","caption":"yellow bottle cap","category":"bottle cap","failed":true,"reason":"输出解析失败","input_tokens":1900,"output_tokens":38,"attempts":1}
+{"instance_id":38103,"image_name":"0638-fsc147-831.jpg","caption":"black bottle cap","category":"bottle cap","failed":true,"reason":"输出解析失败","input_tokens":1851,"output_tokens":87,"attempts":1}
+{"instance_id":38321,"image_name":"0640-fsc147-840.jpg","caption":"book on the highest layer","category":"book","failed":true,"reason":"输出解析失败","input_tokens":1928,"output_tokens":51,"attempts":1}
+{"instance_id":41921,"image_name":"0689-nwpu-0142.jpg","caption":"person walking away","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1792,"output_tokens":74,"attempts":1}
+{"instance_id":45282,"image_name":"0708-nwpu-0297.jpg","caption":"person wearing blue shirt","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1793,"output_tokens":53,"attempts":1}
+{"instance_id":46989,"image_name":"0716-nwpu-0518.jpg","caption":"person standing","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1816,"output_tokens":89,"attempts":1}
+{"instance_id":52042,"image_name":"0773-nwpu-3216.jpg","caption":"person sitting","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1974,"output_tokens":75,"attempts":1}
+{"instance_id":54672,"image_name":"0798-nwpu-3834.jpg","caption":"person standing","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1916,"output_tokens":64,"attempts":1}
+{"instance_id":56948,"image_name":"0808-nwpu-4087.jpg","caption":"person wearing a yellow coat","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1919,"output_tokens":51,"attempts":1}
+{"instance_id":63247,"image_name":"0844-nwpu-4702.jpg","caption":"person wearing a green scarf","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1919,"output_tokens":29,"attempts":1}
+{"instance_id":77399,"image_name":"1128-cs-0b15905ac8b6f24728d69bd3de2a3996.jpg","caption":"person standing","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":71,"attempts":1}
+{"instance_id":88456,"image_name":"1355-cs-2c51c06cafa0ce9370c8f53785177282.jpg","caption":"person walking","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":47,"attempts":1}
+{"instance_id":90273,"image_name":"1398-cs-30f9d5ebb721a0b88e75efe6d0ef481d.jpg","caption":"person standing","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":73,"attempts":1}
+{"instance_id":94470,"image_name":"1496-cs-3ee51a4c44992fb093ccf66a9a9bea0f.jpg","caption":"person standing","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1891,"output_tokens":93,"attempts":1}
+{"instance_id":96254,"image_name":"1531-cs-449c67e9848295d9621ada0c84db2832.jpg","caption":"person walking","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":127,"attempts":1}
+{"instance_id":108291,"image_name":"1783-cs-6aa504c1067d591191964cccb66b5ba5.jpg","caption":"person standing","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":95,"attempts":1}
+{"instance_id":125415,"image_name":"2178-cs-b6cf708791892307f71adf1bbd2324db.jpg","caption":"person walking","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":51,"attempts":1}
+{"instance_id":127316,"image_name":"2225-cs-c17e30488a498dbe651e6922f89a9a5b.jpg","caption":"person standing","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":121,"attempts":1}
+{"instance_id":138703,"image_name":"2477-cs-ff2fa350fe46d7f4502bce578b5e1686.jpg","caption":"person walking","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":100,"attempts":1}
+{"instance_id":144125,"image_name":"2535-cs-497611a04fe14ae77048c49d572fa38f.jpg","caption":"person in queue","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1933,"output_tokens":46,"attempts":1}
+{"instance_id":145865,"image_name":"2549-cs-63fe0fb89d25541936c009271e98a789.jpg","caption":"person in queue","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1933,"output_tokens":46,"attempts":1}
+{"instance_id":148012,"image_name":"2571-cs-8b27ac15ed375db0493523683dad9ac0.jpg","caption":"person in queue","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1933,"output_tokens":46,"attempts":1}
+{"instance_id":148460,"image_name":"2574-cs-8ee9a6e56b7376d2bf80a46d61d0a503.jpg","caption":"person in queue","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1933,"output_tokens":64,"attempts":1}
+{"instance_id":148439,"image_name":"2574-cs-8ee9a6e56b7376d2bf80a46d61d0a503.jpg","caption":"person in queue","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1933,"output_tokens":75,"attempts":1}
+{"instance_id":149013,"image_name":"2579-cs-9ac0e23215c1671bf88b17fecd323c5b.jpg","caption":"person in queue","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1917,"output_tokens":112,"attempts":1}
+{"instance_id":153771,"image_name":"2629-cs-eb162e21140500146a356c6ad14c7fce.jpg","caption":"person in queue","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1933,"output_tokens":91,"attempts":1}
+{"instance_id":154191,"image_name":"2636-cs-f81f4317f61b20232aa9a38bfa5113c0.jpg","caption":"person in queue","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1933,"output_tokens":66,"attempts":1}
+{"instance_id":165821,"image_name":"3166-cs-69df8e1b19f302e38e653a2da33e941b.jpg","caption":"person sitting","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":88,"attempts":1}
+{"instance_id":37777,"image_name":"0636-fsc147-820.jpg","caption":"yellow bottle cap","category":"bottle cap","failed":true,"reason":"输出解析失败","input_tokens":1900,"output_tokens":40,"attempts":1}
+{"instance_id":32937,"image_name":"0544-fsc147-7290.jpg","caption":"crayon in the middle row","category":"crayon","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":53,"attempts":1}
+{"instance_id":32930,"image_name":"0544-fsc147-7290.jpg","caption":"crayon in the middle row","category":"crayon","failed":true,"reason":"输出解析失败","input_tokens":1604,"output_tokens":86,"attempts":1}
+{"instance_id":178681,"image_name":"3787-cs-ed5e754a1bcfd1297c3a53d31ddc3682.jpg","caption":"person sitting","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1932,"output_tokens":52,"attempts":1}
+{"instance_id":218177,"image_name":"5647-mall-seq_000170.jpg","caption":"female person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":126,"attempts":1}
+{"instance_id":225913,"image_name":"5969-mall-seq_000789.jpg","caption":"female person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":129,"attempts":1}
+{"instance_id":227204,"image_name":"6017-mall-seq_000899.jpg","caption":"female person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":39,"attempts":1}
+{"instance_id":229118,"image_name":"6082-mall-seq_001026.jpg","caption":"female person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":35,"attempts":1}
+{"instance_id":236218,"image_name":"6379-mall-seq_001634.jpg","caption":"male person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":91,"attempts":1}
+{"instance_id":236784,"image_name":"6396-mall-seq_001666.jpg","caption":"female person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":41,"attempts":1}
+{"instance_id":237264,"image_name":"6419-mall-seq_001711.jpg","caption":"female person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":119,"attempts":1}
+{"instance_id":237953,"image_name":"6448-mall-seq_001776.jpg","caption":"male person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":79,"attempts":1}
+{"instance_id":238640,"image_name":"6474-mall-seq_001831.jpg","caption":"female person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":76,"attempts":1}
+{"instance_id":238684,"image_name":"6476-mall-seq_001833.jpg","caption":"female person","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":94,"attempts":1}
+{"instance_id":250195,"image_name":"6965-mall-seq_000845.jpg","caption":"adult","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":32,"attempts":1}
+{"instance_id":254274,"image_name":"7118-mall-seq_001180.jpg","caption":"elderly","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":51,"attempts":1}
+{"instance_id":256448,"image_name":"7209-mall-seq_001359.jpg","caption":"elderly","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":82,"attempts":1}
+{"instance_id":258745,"image_name":"7290-mall-seq_001513.jpg","caption":"adult","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":34,"attempts":1}
+{"instance_id":261203,"image_name":"7382-mall-seq_001719.jpg","caption":"adult","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1791,"output_tokens":103,"attempts":1}
+{"instance_id":267836,"image_name":"7597-carpk-20160524_GF2_00079.png","caption":"white car","category":"car","failed":true,"reason":"输出解析失败","input_tokens":1942,"output_tokens":46,"attempts":1}
+{"instance_id":271193,"image_name":"7673-carpk-20161030_GF1_00001.png","caption":"white car","category":"car","failed":true,"reason":"输出解析失败","input_tokens":1942,"output_tokens":62,"attempts":1}
+{"instance_id":274616,"image_name":"7772-carpk-20161030_GF2_00080.png","caption":"white car","category":"car","failed":true,"reason":"输出解析失败","input_tokens":1942,"output_tokens":51,"attempts":1}
+{"instance_id":280674,"image_name":"7850-visdrone-00075-00014.jpg","caption":"Person on the top side walk","category":"person","failed":true,"reason":"输出解析失败","input_tokens":1936,"output_tokens":77,"attempts":1}

@@ -23,7 +23,7 @@ from recsub.io import ensure_parent, iter_jsonl
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="分离提取失败记录，原 JSONL 保留成功记录")
-    parser.add_argument("--input", type=Path, default=path("extract_result_local"),
+    parser.add_argument("--input", type=Path, default=path("extract_result_online"),
                         help="待清理的 step3 提取 JSONL")
     parser.add_argument("--failed-output", type=Path, default=None,
                         help="失败记录输出；默认在输入文件名后加 _failed")

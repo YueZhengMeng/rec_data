@@ -3,7 +3,7 @@
 从 step6 的正向子集生成审核条目，并在 loopback 浏览器界面展示原图与实例点。
 可按 source ``image_idx`` 左闭右开区间审核，拖框选择点并翻转 yes/no。
 审核状态实时保存在单个 JSONL 文件中，支持确认保留、废弃、不确定及跳过已审核。
-未审核子集暂按默认规则保留，不确定子集标记为 unknown，等待二次审核。
+仅保存经过审核操作的子集结果；同一子集保留最新记录，unknown 留待二次审核。
 
     python step8_review_sheet.py --start 1000 --end 2000
 """
@@ -24,7 +24,10 @@ from typing import Any, Mapping, Sequence
 
 from recsub.config import CONFIG, path, resolve_dir
 from recsub.console import configure_console
-from recsub.io import append_jsonl, iter_jsonl, write_jsonl_atomic
+from recsub.io import iter_jsonl, write_jsonl_atomic
+from recsub.review_tasks import (
+    claim_task_outputs, load_and_validate_task, prepare_review_tasks, validate_task_state,
+)
 from recsub.subset_visualization import load_subset_nodes
 
 
@@ -128,6 +131,15 @@ def load_review_state(state_path: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
+def save_review_state(state_path: Path, states: dict[str, dict[str, Any]]) -> None:
+    """Atomically save one latest operated row per subset, then commit the snapshot in memory."""
+    saved = {review_id: dict(row, review_id=review_id) for review_id, row in states.items()
+             if review_status(row) != "pending"}
+    write_jsonl_atomic(state_path, saved.values())
+    states.clear()
+    states.update(saved)
+
+
 def effective_partitions(item: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, list[int]]:
     """Apply explicit yes/no flips without changing unknown instances."""
     yes = set(map(int, item.get("yes_ids", ())))
@@ -146,12 +158,16 @@ def effective_partitions(item: Mapping[str, Any], state: Mapping[str, Any]) -> d
 
 def finalize_items(items: Sequence[Mapping[str, Any]], states: Mapping[str, Mapping[str, Any]],
                    output_path: Path) -> dict[str, int]:
-    """Export all items except explicitly discarded ones; untouched items default to keep."""
+    """Export unique operated subsets using their latest state; exclude pending/discard."""
+    unique_items = {str(item["review_id"]): item for item in items}
     final = []
-    discarded = 0
-    for item in items:
-        state = states.get(str(item["review_id"]), {})
+    discarded = unreviewed = 0
+    for review_id, item in unique_items.items():
+        state = states.get(review_id, {})
         status = review_status(state)
+        if status == "pending":
+            unreviewed += 1
+            continue
         if status == "discard":
             discarded += 1
             continue
@@ -163,15 +179,15 @@ def finalize_items(items: Sequence[Mapping[str, Any]], states: Mapping[str, Mapp
         final_item["node_type"] = "predicate_subset"
         final_item["parent_ids"] = [item.get("parent_id")]
         final_item["review"] = {
-            "status": "unknown" if status == "unknown" else "keep", "reviewed": status == "keep",
-            "defaulted": status == "pending",
+            "status": status, "reviewed": status == "keep",
+            "defaulted": status == "keep" and state.get("defaulted") is True,
             "discarded": False,
             "label_overrides": dict(state.get("labels") or {}),
             "flipped_instance_ids": sorted(int(key) for key in (state.get("labels") or {})),
         }
         final.append(final_item)
     write_jsonl_atomic(output_path, final)
-    return {"items": len(items), "kept": len(final), "discarded": discarded}
+    return {"items": len(unique_items), "kept": len(final), "discarded": discarded, "unreviewed": unreviewed}
 
 
 # --------------------------------------------------------------------------
@@ -226,14 +242,14 @@ details{margin-top:18px}summary{cursor:pointer;color:#555}
 <div><button class="flip" onclick="flipSelected()">手动翻转所选 yes/no</button>
 <button onclick="setSelectedLabel('yes')">将框选点全部设为 yes</button>
 <button onclick="setSelectedLabel('no')">将框选点全部设为 no</button></div>
-<p class="small">← / A：上一子集；→ / D：下一子集；空格：废弃并下一条。未审核仅暂按默认规则保留，点击“确认保留”才明确完成审核；“不确定”保存为 unknown、留待二次审核。“跳过已审核”从下一条起跳过保留/废弃，停在 unknown 或未审核条目，不越过本次区间。拖框结束会自动翻转所选 yes/no 一次；如果还要再次切换，可点“手动翻转所选 yes/no”。W：框选点全设 yes；S：框选点全设 no（包括点级 unknown）。</p>
+<p class="small">← / A：上一子集；→ / D：下一子集，并将当前未审核条目保存为“已审核 · 默认保留”；空格：废弃并下一条。“确认保留”表示明确保留；“不确定”保存为 unknown、留待二次审核。已有保留、废弃或 unknown 不会因下一条而改变。“跳过已审核”从下一条起跳过保留/废弃，停在 unknown 或未审核条目，不越过本次区间。拖框结束会自动翻转所选 yes/no 一次；如果还要再次切换，可点“手动翻转所选 yes/no”。W：框选点全设 yes；S：框选点全设 no（包括点级 unknown）。</p>
 <button onclick="finalize()">保存最终子集</button><p id="status" role="status"></p></div>
 <details><summary>查看技术详情（JSON）</summary><pre id="meta"></pre></details>
 </aside></div>
 <script>
 let items=[],states={},index=0,selected=new Set(),drag=null,img=new Image(),ctx,saving=false;
-const reviewTitles={pending:'○ 未审核 · 暂按默认保留',keep:'✓ 已审核 · 已确认保留',discard:'✕ 已审核 · 已废弃',unknown:'？ 不确定 · 待二次审核'};
-const reviewHints={pending:'尚未人工确认；可点击“确认保留”“不确定”或“废弃”',keep:'已保存：已明确确认保留',discard:'已保存：该子集已废弃',unknown:'已保存：unknown，等待二次审核；修改点标签不会取消此状态'};
+const reviewTitles={pending:'○ 未审核 · 不导出结果',keep:'✓ 已审核 · 已确认保留',discard:'✕ 已审核 · 已废弃',unknown:'？ 不确定 · 待二次审核'};
+const reviewHints={pending:'尚未完成审核，不会写入结果；按 D / → 默认保留并前进，也可明确保留、标记不确定或废弃',keep:'已保存：已明确确认保留',discard:'已保存：该子集已废弃',unknown:'已保存：unknown，等待二次审核；修改点标签不会取消此状态'};
 const canvas=document.querySelector('#canvas');ctx=canvas.getContext('2d');
 async function request(url,options){const r=await fetch(url,options);if(!r.ok)throw Error(await r.text());return r.json()}
 async function load(){try{const data=await request('/api/items');items=data.items;states=data.states;index=data.start_index;const range=data.review_range||{start:0,end:null};document.querySelector('#review-range').textContent=`审核区间 [${range.start}, ${range.end??'不限'})`;render()}catch(e){setStatus(e.message)}}
@@ -253,13 +269,14 @@ function renderInfo(item){
  reviewState.dataset.status=status;
  reviewState.dataset.reviewed=String(status==='keep'||status==='discard');
  reviewState.dataset.discarded=String(status==='discard');
- reviewState.textContent=reviewTitles[status];
+ const defaulted=status==='keep'&&state.defaulted===true;
+ reviewState.textContent=defaulted?'✓ 已审核 · 默认保留':reviewTitles[status];
  document.querySelector('#selection-info').textContent=`已框选 ${selected.size} 个实例点`;
  document.querySelector('#meta').textContent=JSON.stringify({review_id:item.review_id,predicate,counts,gates:item.gates||{},state,selected_points:selected.size},null,2);
 }
 function render(){const item=current();if(!item)return;selected.clear();document.querySelector('#progress').textContent=`子集 ${index+1}/${items.length}`;document.querySelector('#image-index').textContent=`image_idx=${item.image_idx} · ${item.image_name}`;
 const state=states[item.review_id]||{};renderInfo(item);
-img.onload=()=>{canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;draw()};img.onerror=()=>setStatus('图片加载失败：'+item.image_name);img.src='/image/'+encodeURIComponent(item.review_id)+'?v='+Date.now();setStatus(reviewHints[reviewStatus(state)])}
+img.onload=()=>{canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;draw()};img.onerror=()=>setStatus('图片加载失败：'+item.image_name);img.src='/image/'+encodeURIComponent(item.review_id)+'?v='+Date.now();setStatus(reviewStatus(state)==='keep'&&state.defaulted===true?'已保存：已审核，按下一张默认保留':reviewHints[reviewStatus(state)])}
 function points(item){return [...item.yes_ids.map((id,i)=>({id,point:item.yes_points[i]})),...item.no_ids.map((id,i)=>({id,point:item.no_points[i]})),...item.unknown_ids.map((id,i)=>({id,point:item.unknown_points[i]}))]}
 function draw(){
  const item=current();if(!item||!img.complete)return;
@@ -282,7 +299,7 @@ async function saveState(patch){
  const item=current(),previous=states[item.review_id]||{};
  let status=patch.status??reviewStatus(previous);
  if(patch.status===undefined&&patch.labels&&status==='pending')status='keep';
- const next={...previous,...patch,review_id:item.review_id,status,discard:status==='discard',reviewed:status==='keep'||status==='discard'};
+ const next={...previous,...patch,review_id:item.review_id,status,discard:status==='discard',reviewed:status==='keep'||status==='discard',defaulted:status==='keep'&&patch.defaulted===true};
  saving=true;
  try{states[item.review_id]=await request('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)});renderInfo(item);draw();return true}
  catch(e){setStatus('保存失败：'+e.message);return false}
@@ -290,10 +307,15 @@ async function saveState(patch){
 }
 async function flipSelected(){const item=current();if(!selected.size)return setStatus('没有框选点');const labels=labelMap(item);let changed=0;for(const id of selected){if(labels[id]==='yes'){labels[id]='no';changed++}else if(labels[id]==='no'){labels[id]='yes';changed++}}if(!changed)return setStatus(`已框选 ${selected.size} 个点，但没有可翻转的 yes/no 标签`);const changes={};for(const id of selected)if(labels[id]==='yes'||labels[id]==='no')changes[id]=labels[id];if(await saveState({labels:{...(states[item.review_id]?.labels||{}),...changes}}))setStatus(`框选后已自动翻转并保存 ${changed} 个 yes/no 标签`)}
 async function setSelectedLabel(label){const item=current();if(!selected.size)return setStatus('没有框选点');const changes={};for(const id of selected)changes[id]=label;if(await saveState({labels:{...(states[item.review_id]?.labels||{}),...changes}}))setStatus(`已将 ${selected.size} 个框选点全部设为 ${label} 并保存`)}
-async function discardCurrent(){if(await saveState({status:'discard'})){setStatus('已废弃并保存');next()}}
+async function discardCurrent(){if(await saveState({status:'discard'})){setStatus('已废弃并保存');await next()}}
 async function restoreCurrent(){if(await saveState({status:'keep'}))setStatus('已明确确认保留并保存')}
 async function unknownCurrent(){if(await saveState({status:'unknown'}))setStatus('已保存为 unknown，等待二次审核')}
-function next(){if(saving)return setStatus('正在保存，请稍候');if(index<items.length-1){index++;render()}else setStatus('已到本次区间最后一个子集')}
+async function next(){
+ if(saving)return setStatus('正在保存，请稍候');
+ const item=current();if(!item)return;
+ if(reviewStatus(states[item.review_id])==='pending'&&!await saveState({status:'keep',defaulted:true}))return;
+ if(index<items.length-1){index++;render()}else setStatus('已到本次区间最后一个子集');
+}
 function previous(){if(saving)return setStatus('正在保存，请稍候');if(index>0){index--;render()}else setStatus('已到本次区间第一个子集')}
 function skipReviewed(){
  if(saving)return setStatus('正在保存，请稍候');
@@ -303,9 +325,9 @@ function skipReviewed(){
  }
  setStatus('本次区间内没有后续 unknown 或未审核子集，已到区间末尾');
 }
-async function finalize(){if(saving)return setStatus('正在保存，请稍候');try{const result=await request('/api/finalize',{method:'POST'});setStatus(`最终子集已保存：保留 ${result.kept}（含默认保留及 unknown），废弃 ${result.discarded}`)}catch(e){setStatus(e.message)}}
+async function finalize(){if(saving)return setStatus('正在保存，请稍候');try{const result=await request('/api/finalize',{method:'POST'});setStatus(`最终子集已保存：已操作保留 ${result.kept}（含 unknown），废弃 ${result.discarded}，未审核未导出 ${result.unreviewed}`)}catch(e){setStatus(e.message)}}
 function setStatus(text){document.querySelector('#status').textContent=text}
-document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName))return;if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A')previous();else if(e.key==='ArrowRight'||e.key==='d'||e.key==='D')next();else if(e.key==='w'||e.key==='W')setSelectedLabel('yes');else if(e.key==='s'||e.key==='S')setSelectedLabel('no');else if(e.key===' '){e.preventDefault();discardCurrent()}});load();
+document.addEventListener('keydown',async e=>{if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName))return;if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A')previous();else if(e.key==='ArrowRight'||e.key==='d'||e.key==='D'){e.preventDefault();await next()}else if(e.key==='w'||e.key==='W')setSelectedLabel('yes');else if(e.key==='s'||e.key==='S')setSelectedLabel('no');else if(e.key===' '){e.preventDefault();await discardCurrent()}});load();
 </script>"""
 
 
@@ -367,6 +389,7 @@ class ReviewHandler(http.server.BaseHTTPRequestHandler):
         try:
             if route == "/api/finalize":
                 with self.state["lock"]:
+                    save_review_state(self.state["state_path"], self.state["states"])
                     report = finalize_items(self.state["all_items"], self.state["states"],
                                             self.state["final_output"])
                 self.send_json(report)
@@ -398,10 +421,14 @@ class ReviewHandler(http.server.BaseHTTPRequestHandler):
             # 也能按同一规则推断状态。
             row = {"review_id": review_id, "status": status, "discard": status == "discard",
                    "reviewed": status in {"keep", "discard"},
+                   "defaulted": status == "pending" or (status == "keep" and payload.get("defaulted") is True),
                    "labels": {str(key): value for key, value in labels.items()}}
             with self.state["lock"]:
-                append_jsonl(self.state["state_path"], row, fsync=True)
-                self.state["states"][review_id] = row
+                updated = dict(self.state["states"])
+                updated[review_id] = row
+                save_review_state(self.state["state_path"], updated)
+                self.state["states"].clear()
+                self.state["states"].update(updated)
             self.send_json(row)
         except Exception as error:
             self.send_bytes(str(error).encode("utf-8"), "text/plain; charset=utf-8", 400)
@@ -439,10 +466,17 @@ def select_review_items(items: Sequence[dict], start: int = 0, end: int | None =
 
 def serve(items: Sequence[dict], image_dir: Path, state_path: Path,
           final_output: Path, host: str, port: int, image_idx: int | None = None,
-          start: int = 0, end: int | None = None) -> None:
+          start: int = 0, end: int | None = None,
+          task_manifest: Mapping[str, Any] | None = None) -> None:
     validate_review_range(start, end, image_idx)
     all_items = list(items)
+    if task_manifest is not None:
+        manifest_start, manifest_end = int(task_manifest["start"]), int(task_manifest["end"])
+        if (start, end) != (manifest_start, manifest_end):
+            raise ValueError("审核任务区间与 manifest 不一致")
     items = select_review_items(all_items, start, end)
+    if task_manifest is not None:
+        validate_task_state(load_review_state(state_path), items)
     image_idx = start if image_idx is None else image_idx
     start_index = start_index_for(items, image_idx)
     states = load_review_state(state_path)
@@ -452,6 +486,7 @@ def serve(items: Sequence[dict], image_dir: Path, state_path: Path,
         "states": states, "state_path": state_path, "final_output": final_output,
         "image_dir": image_dir, "start_index": start_index, "lock": threading.Lock(),
         "review_range": {"start": start, "end": end},
+        "task_manifest": dict(task_manifest) if task_manifest is not None else None,
     }
 
     class LocalReviewServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -473,8 +508,10 @@ def serve(items: Sequence[dict], image_dir: Path, state_path: Path,
     finally:
         server.server_close()
         with state["lock"]:
+            save_review_state(state_path, states)
             report = finalize_items(all_items, states, final_output)
-        print(f"✅ 最终子集已保存：保留 {report['kept']}，废弃 {report['discarded']} → {final_output}")
+        print(f"✅ 最终子集已保存：保留 {report['kept']}（含 unknown），废弃 {report['discarded']}，"
+              f"未审核未导出 {report['unreviewed']} → {final_output}")
 
 
 # --------------------------------------------------------------------------
@@ -485,10 +522,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--subsets", type=Path, default=path("subsets"))
     parser.add_argument("--instances", type=Path, default=path("instance_data"),
                         help="step1 实例表，用于恢复 source image_idx")
+    parser.add_argument("--prepare-tasks", type=int, default=None,
+                        help="一次生成多个冻结审核任务目录（指定任务数）")
+    parser.add_argument("--images-per-task", type=int, default=1000,
+                        help="每个任务分配的 image_idx 数量（默认 1000）")
     parser.add_argument("--review-dir", type=Path, default=resolve_dir(CONFIG["paths"]["review_dir"]))
     parser.add_argument("--build", action="store_true", help="只生成 review_items.jsonl + review_sheet.csv")
     parser.add_argument("--serve", action="store_true", help="使用已有审核条目启动本地浏览器")
-    parser.add_argument("--start", type=int, default=0, help="审核区间起点 image_idx（含，默认 0）")
+    parser.add_argument("--start", type=int, default=None, help="审核区间起点 image_idx（含，默认 0）")
     parser.add_argument("--end", type=int, default=None, help="审核区间终点 image_idx（不含，默认不限）")
     parser.add_argument("--image-idx", type=int, default=None,
                         help="初始 source image_idx（默认区间起点；不改变审核范围）")
@@ -498,10 +539,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="审核条目输入；默认 review/review_items.jsonl")
     parser.add_argument("--state", type=Path, default=None,
                         help="单人审核状态 JSONL；默认 review/review_state.jsonl")
-    parser.add_argument("--final-output", type=Path, default=path("subsets_final"))
+    parser.add_argument("--final-output", type=Path, default=None,
+                        help="最终结果 JSONL；任务模式默认写入任务目录 final_subsets.jsonl")
     args = parser.parse_args(argv)
+    if args.prepare_tasks is not None:
+        if args.start is None:
+            args.start = 0
+        if args.prepare_tasks <= 0 or args.images_per_task <= 0:
+            parser.error("--prepare-tasks 和 --images-per-task 必须是正整数")
+        if args.end is not None and args.end != args.start + args.prepare_tasks * args.images_per_task:
+            parser.error("准备任务时 --end 必须等于 start + prepare-tasks × images-per-task")
+        return args
     try:
-        validate_review_range(args.start, args.end, args.image_idx)
+        validate_review_range(args.start or 0, args.end, args.image_idx)
     except ValueError as error:
         parser.error(str(error))
     return args
@@ -510,11 +560,46 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     configure_console()
     args = parse_args(argv)
+    if args.prepare_tasks is not None:
+        if not args.subsets.is_file():
+            raise FileNotFoundError(f"找不到 subsets：{args.subsets}")
+        items = build_review_items(args.subsets, args.instances)
+        batch = prepare_review_tasks(items, args.review_dir, args.prepare_tasks,
+                                     args.images_per_task, write_review_artifacts,
+                                     start=args.start)
+        print(f"✅ 已生成 {batch['task_count']} 个冻结审核任务 → {args.review_dir}")
+        for task in batch["tasks"]:
+            print(f"   {task['task_id']}: image_idx=[{task['start']}, {task['end']})，"
+                  f"{task['image_count']} 张图片、{task['item_count']} 个子集")
+        return 0
+
     args.review_dir.mkdir(parents=True, exist_ok=True)
-    items_path = args.items or args.review_dir / "review_items.jsonl"
-    state_path = args.state or args.review_dir / "review_state.jsonl"
-    try:
+    task_manifest_path = args.review_dir / "review_manifest.json"
+    task_manifest = None
+    if task_manifest_path.is_file():
+        if args.build or args.items is not None:
+            raise ValueError("冻结审核任务不能使用 --build 或覆盖 --items")
+        items, task_manifest, _ = load_and_validate_task(args.review_dir)
+        manifest_start, manifest_end = int(task_manifest["start"]), int(task_manifest["end"])
+        if args.start is not None or args.end is not None:
+            if (args.start, args.end) != (manifest_start, manifest_end):
+                raise ValueError("命令行区间与冻结审核任务 manifest 不一致")
+        args.start, args.end = manifest_start, manifest_end
+        items_path = args.review_dir / task_manifest.get("review_items", "review_items.jsonl")
+        state_path = args.review_dir / task_manifest.get("state", "review_state.jsonl")
+        final_output = args.review_dir / task_manifest.get("final_output", "final_subsets.jsonl")
+        if args.state is not None and args.state != state_path:
+            raise ValueError("冻结审核任务不能把 --state 写到任务目录外")
+        if args.final_output is not None and args.final_output != final_output:
+            raise ValueError("冻结审核任务不能把 --final-output 写到任务目录外")
+        claim_task_outputs(args.review_dir, task_manifest,
+                           select_review_items(items, manifest_start, manifest_end))
+    else:
+        args.start = args.start if args.start is not None else 0
         should_build = args.build or not args.serve
+        items_path = args.items or args.review_dir / "review_items.jsonl"
+        state_path = args.state or args.review_dir / "review_state.jsonl"
+        final_output = args.final_output or path("subsets_final")
         if should_build:
             if not args.subsets.is_file():
                 raise FileNotFoundError(f"找不到 subsets：{args.subsets}")
@@ -527,8 +612,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not items_path.is_file():
             raise FileNotFoundError(f"找不到审核条目：{items_path}，先移除 --serve 重新构建")
         items = list(iter_jsonl(items_path)) if not should_build else items
-        serve(items, args.image_dir, state_path, args.final_output,
-              CONFIG["review"]["host"], args.port, args.image_idx, args.start, args.end)
+
+    try:
+        serve(items, args.image_dir, state_path, final_output,
+              CONFIG["review"]["host"], args.port, args.image_idx, args.start, args.end,
+              task_manifest=task_manifest)
         return 0
     except KeyboardInterrupt:
         print("审核已停止")

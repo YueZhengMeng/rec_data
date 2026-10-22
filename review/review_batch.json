@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "dataset_id": "078425797f753c44b83471b06a264f6cf214b30d745393c1215dfd560d153ae1",
+  "items_sha256": "a4337e9bcb6e1d697d56e5a9a063a23332e43a2476b8d75c5b807bb258e5cb71",
+  "task_count": 9,
+  "images_per_task": 1000,
+  "start": 0,
+  "end": 9000,
+  "item_count": 29869,
+  "image_count": 7374,
+  "sources": {},
+  "tasks": [
+    {
+      "task_id": "review_01",
+      "directory": "review_01",
+      "start": 0,
+      "end": 1000,
+      "item_count": 4343,
+      "image_count": 923,
+      "fingerprint": "754f217ed7006563a0a215edec662e7817f998f1eb8e62605d9aa8f8d294c828"
+    },
+    {
+      "task_id": "review_02",
+      "directory": "review_02",
+      "start": 1000,
+      "end": 2000,
+      "item_count": 4161,
+      "image_count": 932,
+      "fingerprint": "b6f1f11662cc1e3a3bf1e03d13591143e1c6ac394722880c69f505d9e3cf7bfb"
+    },
+    {
+      "task_id": "review_03",
+      "directory": "review_03",
+      "start": 2000,
+      "end": 3000,
+      "item_count": 3339,
+      "image_count": 950,
+      "fingerprint": "a03fdae7500d52879c1dffc440c421ec016494d03e4bbdd13c5d29bd687dce4c"
+    },
+    {
+      "task_id": "review_04",
+      "directory": "review_04",
+      "start": 3000,
+      "end": 4000,
+      "item_count": 2703,
+      "image_count": 935,
+      "fingerprint": "39d5f093ad90ffd33783f6fd7553ec83d9aca8fa21815cbd9e7599c4708928c7"
+    },
+    {
+      "task_id": "review_05",
+      "directory": "review_05",
+      "start": 4000,
+      "end": 5000,
+      "item_count": 3361,
+      "image_count": 772,
+      "fingerprint": "624669f429a35fc4d158b80864a2839296797b43818b77712ed80a33eb22c664"
+    },
+    {
+      "task_id": "review_06",
+      "directory": "review_06",
+      "start": 5000,
+      "end": 6000,
+      "item_count": 3770,
+      "image_count": 918,
+      "fingerprint": "1c0a5ccf8ca1598bde9b27a11af7f70426a3f0456ee2fe2551e214ca7871185a"
+    },
+    {
+      "task_id": "review_07",
+      "directory": "review_07",
+      "start": 6000,
+      "end": 7000,
+      "item_count": 4093,
+      "image_count": 994,
+      "fingerprint": "b666c9d2e5293fa7eccb1f260fb747f853393be3efb5ebb77d4e8ae3a0d074ac"
+    },
+    {
+      "task_id": "review_08",
+      "directory": "review_08",
+      "start": 7000,
+      "end": 8000,
+      "item_count": 4028,
+      "image_count": 939,
+      "fingerprint": "70089516bc7c96dfcbde9d4c7e9ed4b2719f3e00de69983cba93501aa11b4cbe"
+    },
+    {
+      "task_id": "review_09",
+      "directory": "review_09",
+      "start": 8000,
+      "end": 9000,
+      "item_count": 71,
+      "image_count": 11,
+      "fingerprint": "ab7a629f62b71419a2bea89f4817141920ee24581ffe1af0ce71d13b4e8b2ab9"
+    }
+  ]
+}

@@ -25,7 +25,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="分离 step5 判断失败记录，原 JSONL 保留成功记录"
     )
-    parser.add_argument("--input", type=Path, default=path("predicate_labels_local"),
+    parser.add_argument("--input", type=Path, default=path("predicate_labels_online"),
                         help="step5 本地判断结果 JSONL")
     parser.add_argument("--failed-output", type=Path, default=None,
                         help="失败记录输出；默认在输入文件名后加 _failed")
