@@ -239,6 +239,8 @@ details{margin-top:18px}summary{cursor:pointer;color:#555}
 <button class="uncertain" onclick="unknownCurrent()">不确定（unknown）</button>
 <button onclick="skipReviewed()">跳过已审核</button>
 <button class="discard" onclick="discardCurrent()">空格：废弃此子集并下一条</button></div>
+<div><button id="marker-size" onclick="toggleMarkerSize()" aria-pressed="false">标记大小：standard（标准）</button>
+<button id="marker-visibility" onclick="toggleMarkers()" aria-pressed="true">隐藏标记（F）</button></div>
 <div><button class="flip" onclick="flipSelected()">手动翻转所选 yes/no</button>
 <button onclick="setSelectedLabel('yes')">将框选点全部设为 yes</button>
 <button onclick="setSelectedLabel('no')">将框选点全部设为 no</button></div>
@@ -248,6 +250,11 @@ details{margin-top:18px}summary{cursor:pointer;color:#555}
 </aside></div>
 <script>
 let items=[],states={},index=0,selected=new Set(),drag=null,img=new Image(),ctx,saving=false;
+let markerSize='standard',markersVisible=true;
+const markerDimensions={
+ standard:{crossRadius:7,crossHaloWidth:8,crossWidth:4,dotRadius:6,dotOutlineWidth:3},
+ small:{crossRadius:3.5,crossHaloWidth:4,crossWidth:2,dotRadius:3,dotOutlineWidth:1.5}
+};
 const reviewTitles={pending:'○ 未审核 · 不导出结果',keep:'✓ 已审核 · 已确认保留',discard:'✕ 已审核 · 已废弃',unknown:'？ 不确定 · 待二次审核'};
 const reviewHints={pending:'尚未完成审核，不会写入结果；按 D / → 默认保留并前进，也可明确保留、标记不确定或废弃',keep:'已保存：已明确确认保留',discard:'已保存：该子集已废弃',unknown:'已保存：unknown，等待二次审核；修改点标签不会取消此状态'};
 const canvas=document.querySelector('#canvas');ctx=canvas.getContext('2d');
@@ -275,18 +282,34 @@ function renderInfo(item){
  document.querySelector('#meta').textContent=JSON.stringify({review_id:item.review_id,predicate,counts,gates:item.gates||{},state,selected_points:selected.size},null,2);
 }
 function render(){const item=current();if(!item)return;selected.clear();document.querySelector('#progress').textContent=`子集 ${index+1}/${items.length}`;document.querySelector('#image-index').textContent=`image_idx=${item.image_idx} · ${item.image_name}`;
-const state=states[item.review_id]||{};renderInfo(item);
+const state=states[item.review_id]||{};updateMarkerControls();renderInfo(item);
 img.onload=()=>{canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;draw()};img.onerror=()=>setStatus('图片加载失败：'+item.image_name);img.src='/image/'+encodeURIComponent(item.review_id)+'?v='+Date.now();setStatus(reviewStatus(state)==='keep'&&state.defaulted===true?'已保存：已审核，按下一张默认保留':reviewHints[reviewStatus(state)])}
 function points(item){return [...item.yes_ids.map((id,i)=>({id,point:item.yes_points[i]})),...item.no_ids.map((id,i)=>({id,point:item.no_points[i]})),...item.unknown_ids.map((id,i)=>({id,point:item.unknown_points[i]}))]}
+function updateMarkerControls(){
+ const sizeButton=document.querySelector('#marker-size');
+ sizeButton.textContent=markerSize==='small'?'标记大小：small（小）':'标记大小：standard（标准）';
+ sizeButton.setAttribute('aria-pressed',String(markerSize==='small'));
+ const visibilityButton=document.querySelector('#marker-visibility');
+ visibilityButton.textContent=markersVisible?'隐藏标记（F）':'显示标记（F）';
+ visibilityButton.setAttribute('aria-pressed',String(markersVisible));
+}
+function toggleMarkerSize(){markerSize=markerSize==='standard'?'small':'standard';updateMarkerControls();draw()}
+function toggleMarkers(){markersVisible=!markersVisible;updateMarkerControls();draw()}
 function draw(){
  const item=current();if(!item||!img.complete)return;
- ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0);const labels=labelMap(item);
+ ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0);
+ const labels=labelMap(item),dimensions=markerDimensions[markerSize];
  for(const {id,point} of points(item)){
   if(!point)continue;const [x,y]=point,yes=labels[id]==='yes',isSelected=selected.has(String(id));
   if(isSelected){ctx.beginPath();ctx.arc(x,y,12,0,Math.PI*2);ctx.lineWidth=3;ctx.strokeStyle='#ffd400';ctx.stroke()}
-  ctx.beginPath();ctx.lineWidth=8;ctx.strokeStyle='white';ctx.fillStyle=yes?'#b51f32':'#199e70';
-  if(yes){ctx.moveTo(x-7,y-7);ctx.lineTo(x+7,y+7);ctx.moveTo(x-7,y+7);ctx.lineTo(x+7,y-7);ctx.stroke();ctx.lineWidth=4;ctx.strokeStyle='#b51f32';ctx.beginPath();ctx.moveTo(x-7,y-7);ctx.lineTo(x+7,y+7);ctx.moveTo(x-7,y+7);ctx.lineTo(x+7,y-7);ctx.stroke()}
-  else{ctx.arc(x,y,6,0,Math.PI*2);ctx.fill();ctx.lineWidth=3;ctx.strokeStyle='white';ctx.stroke()}
+  if(!markersVisible)continue;
+  ctx.beginPath();ctx.lineWidth=dimensions.crossHaloWidth;ctx.strokeStyle='white';ctx.fillStyle=yes?'#b51f32':'#199e70';
+  if(yes){
+   const r=dimensions.crossRadius;
+   ctx.moveTo(x-r,y-r);ctx.lineTo(x+r,y+r);ctx.moveTo(x-r,y+r);ctx.lineTo(x+r,y-r);ctx.stroke();
+   ctx.lineWidth=dimensions.crossWidth;ctx.strokeStyle='#b51f32';ctx.beginPath();
+   ctx.moveTo(x-r,y-r);ctx.lineTo(x+r,y+r);ctx.moveTo(x-r,y+r);ctx.lineTo(x+r,y-r);ctx.stroke();
+  }else{ctx.arc(x,y,dimensions.dotRadius,0,Math.PI*2);ctx.fill();ctx.lineWidth=dimensions.dotOutlineWidth;ctx.strokeStyle='white';ctx.stroke()}
  }
  if(drag){ctx.fillStyle='rgba(255,215,0,.18)';ctx.strokeStyle='#d5a800';ctx.lineWidth=2;ctx.fillRect(drag.x,drag.y,drag.w,drag.h);ctx.strokeRect(drag.x,drag.y,drag.w,drag.h)}
 }
@@ -327,7 +350,17 @@ function skipReviewed(){
 }
 async function finalize(){if(saving)return setStatus('正在保存，请稍候');try{const result=await request('/api/finalize',{method:'POST'});setStatus(`最终子集已保存：已操作保留 ${result.kept}（含 unknown），废弃 ${result.discarded}，未审核未导出 ${result.unreviewed}`)}catch(e){setStatus(e.message)}}
 function setStatus(text){document.querySelector('#status').textContent=text}
-document.addEventListener('keydown',async e=>{if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName))return;if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A')previous();else if(e.key==='ArrowRight'||e.key==='d'||e.key==='D'){e.preventDefault();await next()}else if(e.key==='w'||e.key==='W')setSelectedLabel('yes');else if(e.key==='s'||e.key==='S')setSelectedLabel('no');else if(e.key===' '){e.preventDefault();await discardCurrent()}});load();
+document.addEventListener('keydown',async e=>{
+ if(e.isComposing||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||document.activeElement.isContentEditable)return;
+ if(e.key==='f'||e.key==='F'){
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  e.preventDefault();if(!e.repeat)toggleMarkers();
+ }else if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A')previous();
+ else if(e.key==='ArrowRight'||e.key==='d'||e.key==='D'){e.preventDefault();await next()}
+ else if(e.key==='w'||e.key==='W')setSelectedLabel('yes');
+ else if(e.key==='s'||e.key==='S')setSelectedLabel('no');
+ else if(e.key===' '){e.preventDefault();await discardCurrent()}
+});load();
 </script>"""
 
 
