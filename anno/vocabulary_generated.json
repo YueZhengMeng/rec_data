@@ -1,15 +1,15 @@
 {
-    "metadata": {
-        "origin": "generated-by-step4-tail",
-        "source_extract": "anno/extract_result.jsonl",
-        "parent_vocabulary": {
-            "train": "/mnt/iscas2/pwb/rec_data/anno/attribute_vocabulary_train.json",
-            "all": "/mnt/iscas2/pwb/rec_data/anno/attribute_vocabulary_all.json"
-        },
-        "splits": "/mnt/iscas2/pwb/rec_data/anno/splits.json",
-        "count": 0,
-        "merged_workers": 8,
-        "entry_count": 0
+  "metadata": {
+    "origin": "generated-by-step4-tail",
+    "source_extract": "anno/extract_result.jsonl",
+    "parent_vocabulary": {
+      "train": "/mnt/iscas2/pwb/rec_data/anno/attribute_vocabulary_train.json",
+      "all": "/mnt/iscas2/pwb/rec_data/anno/attribute_vocabulary_all.json"
     },
-    "entries": []
+    "splits": "/mnt/iscas2/pwb/rec_data/anno/splits.json",
+    "count": 0,
+    "merged_workers": 8,
+    "entry_count": 0
+  },
+  "entries": []
 }

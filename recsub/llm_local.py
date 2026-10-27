@@ -159,7 +159,7 @@ class LocalAttributesExtractor:
             self,
             model_path: str,
             image_dir: str,
-            cropper: AdaptiveCropper,
+            cropper: AdaptiveCropper | None,
             accelerator: Accelerator,
             model_mode: str,
             dtype: str,
@@ -354,18 +354,27 @@ class LocalAttributesExtractor:
         return effective_token_ids
 
     def infer_batch(self, instance_list: list[dict[str, Any]],
-                    prompts: list[str] | None = None) -> list[dict[str, Any]]:
-        """批量生成回答，返回原始文本、token 置信度和 PPL。"""
+                    prompts: list[str] | None = None, *,
+                    text_only: bool = False) -> list[dict[str, Any]]:
+        """批量生成回答；step9 可用 text_only 复用生成与置信度统计，不读图片。"""
         if not instance_list:
             return []
         if prompts is not None and len(prompts) != len(instance_list):
             raise ValueError("prompts 数量必须与 instance_list 一致")
+        if text_only and prompts is None:
+            raise ValueError("纯文本推理必须显式提供 prompts")
 
         all_texts = []
         all_images = []
         for index, instance_data in enumerate(instance_list):
             text_prompt = prompts[index] if prompts is not None else None
-            messages, images = self._build_message(instance_data, text_prompt)
+            if text_only:
+                messages = [{"role": "user", "content": [
+                    {"type": "text", "text": text_prompt},
+                ]}]
+                images = []
+            else:
+                messages, images = self._build_message(instance_data, text_prompt)
             input_text = self.processor.apply_chat_template(
                 messages,
                 tokenize=False,
@@ -376,11 +385,12 @@ class LocalAttributesExtractor:
             # processor 的 image 列表按照文本中出现的顺序展开。
             all_images.extend(images)
 
+        processor_kwargs = {"images": all_images} if all_images else {}
         inputs = self.processor(
             text=all_texts,
-            images=all_images,
             padding=True,
             return_tensors="pt",
+            **processor_kwargs,
         )
         inputs = {
             key: value.to(self.device) if hasattr(value, "to") else value

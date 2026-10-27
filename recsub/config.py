@@ -100,11 +100,19 @@ CONFIG: dict[str, Any] = {
         # step6 产出：门禁筛选后的子集
         "subsets": "anno/fine_grained_subsets.jsonl",
         "subset_decisions": "anno/subset_decisions_log.jsonl",
+        "review_subset_decisions": "anno/review_subset_decisions_log.jsonl",
         # step7 产出：子集可视化
         "output_dir": "show_subsets",
         # step8 产出：人工审核与最终子集
         "review_dir": "review",
         "subsets_final": "anno/fine_grained_subsets_final.jsonl",
+        # step9 输入与产出：保留人工合并子集，另存合成文本及检查结果
+        "caption_subsets": "anno/final_subsets.jsonl",
+        "captions_online": "anno/subset_captions.jsonl",
+        "captions_local": "anno/subset_captions_local.jsonl",
+        # step10 独立导出；不修改原 annotations/splits
+        "annotations_subset": "anno/annotations_subset.json",
+        "splits_subset": "anno/splits_subset.json",
     },
 
     # ---- 在线调用 ----
@@ -147,7 +155,14 @@ CONFIG: dict[str, Any] = {
         "max_preview": 100,
     },
 
-    # ---- step3 / step5 续跑策略（不影响模型输入，不纳入运行指纹）----
+    # ---- step9 属性短语/caption 合成 ----
+    "caption": {
+        "limit": 0,  # 0 表示全量；先截取再排除已完成 ID
+        "presence_penalty_local": 0.0,  # 允许合成时原样复用属性词
+        "review_port": 8766,  # step9 本机人工语言审核页面
+    },
+
+    # ---- step3 / step5 / step9 续跑策略（不影响模型输入，不纳入运行指纹）----
     "resume": {
         # 默认警告后继续；用 --check-fingerprint 可显式启用严格的配置一致性检查。
         "check_fingerprint": False,

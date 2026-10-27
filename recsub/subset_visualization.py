@@ -177,7 +177,7 @@ def render_subset(image: Image.Image, node: Mapping[str, Any], *, subset_index: 
         ((28 if prominent else 24) + 7)
         + max(1, len(wrap_text(measure, "—" if value is None or value == "" else str(value),
                                sidebar_text_width, font(34 if prominent else 26, prominent))))
-          * ((34 if prominent else 26) + 7)
+        * ((34 if prominent else 26) + 7)
         + 14
         for _, value, prominent, _ in fields
     )

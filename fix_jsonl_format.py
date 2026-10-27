@@ -45,7 +45,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="只解析并统计，不写任何文件")
     args = parser.parse_args(argv)
     if not args.paths:
-        args.paths = [PROJECT_ROOT / "anno"]
+        args.paths = [PROJECT_ROOT / "review/review_09"]
     return args
 
 

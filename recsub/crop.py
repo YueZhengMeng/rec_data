@@ -717,7 +717,6 @@ def _compose_crop_visualization(
 def _visualize_random_samples(sample_count: int = 10) -> None:
     """从 instance_data.jsonl 随机抽样，把三视图拼图存到 ./tmp 供人工查看。"""
     import json
-    import random
     from pathlib import Path
 
     from recsub.config import CONFIG, crop_config, path
@@ -734,7 +733,8 @@ def _visualize_random_samples(sample_count: int = 10) -> None:
 
     # 密度必须由全量点构建；随机抽样只决定可视化哪些实例。
     cropper = AdaptiveCropper.from_instances(instance_data, crop_config())
-    samples = random.sample(instance_data, k=min(sample_count, len(instance_data)))
+    # samples = random.sample(instance_data, k=min(sample_count, len(instance_data)))
+    samples = instance_data[:sample_count]
 
     for sample_index, instance in enumerate(samples, start=1):
         image_path = image_dir / instance["image_name"]
@@ -759,4 +759,4 @@ def _visualize_random_samples(sample_count: int = 10) -> None:
 
 
 if __name__ == "__main__":
-    _visualize_random_samples(sample_count=100)
+    _visualize_random_samples(sample_count=10)

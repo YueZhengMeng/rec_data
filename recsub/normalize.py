@@ -493,6 +493,7 @@ class PredicateNormalizer:
         result.unresolved = unresolved
         return result
 
+
 def _merge_phrase_evidence(items: Sequence[PhraseEvidence]) -> PhraseEvidence:
     """以最短写法作为代表，同时合并字段、原短语和实例支持集合。"""
     representative = min(items, key=lambda item: (
