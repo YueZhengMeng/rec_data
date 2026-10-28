@@ -110,7 +110,7 @@ async def run(args: argparse.Namespace) -> int:
           f"审核 no {counters['language_no']}，调用/解析失败 {counters['failed']}")
     print(f"   字符串检查 no {counters['string_no']}（非硬门禁）；"
           f"token：input {counters['input_tokens']}，output {counters['output_tokens']}")
-    print(f"   结果 → {args.output}；失败/审核 no 可续跑，也可用 step9_review_captions.py 人工确认")
+    print(f"   结果 → {args.output}；失败/审核 no 可续跑，也可用 step10_review_captions.py 人工确认")
     return 0
 
 

@@ -17,8 +17,9 @@ from PIL import Image
 def encode_image(image: Image.Image) -> str:
     """统一编码为 JPEG base64。
 
-    数据集中 8011 张图有 7691 张 jpg、329 张 png，统一转 JPEG 可以让在线
-    接口只处理一种格式；不传 quality，走 Pillow 的默认质量。
+    源图格式不统一，而在线接口只接收一种 data URL 格式；统一转 JPEG 后，
+    在线与本地两条路径的三视图输入尺寸和编码方式保持一致。不传 quality，
+    走 Pillow 的默认质量。
     """
     buffer = BytesIO()
     image.convert("RGB").save(buffer, format="JPEG")

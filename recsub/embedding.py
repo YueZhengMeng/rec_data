@@ -81,7 +81,3 @@ class Qwen3EmbeddingEncoder:
         for phrase in list(self._cache):
             if phrase not in phrases:
                 del self._cache[phrase]
-
-    @property
-    def cache_size(self) -> int:
-        return len(self._cache)

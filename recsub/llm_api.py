@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 from openai import AsyncOpenAI
 
 from recsub.config import CONFIG, crop_config, online_sampling
-from recsub.crop import AdaptiveCropper, CropConfig, CropMetadata
+from recsub.crop import AdaptiveCropper, CropMetadata
 from recsub.utils import encode_image
 
 
@@ -202,5 +202,5 @@ def build_cropper(instances) -> AdaptiveCropper:
 
 __all__ = [
     "Completion", "OnlineModel", "load_three_views", "build_cropper",
-    "CropConfig", "CropMetadata", "AdaptiveCropper",
+    "CropMetadata", "AdaptiveCropper",
 ]

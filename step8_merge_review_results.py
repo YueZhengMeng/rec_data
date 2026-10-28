@@ -1,10 +1,9 @@
-"""Merge frozen step8 review results and recheck label-sensitive step6 gates.
+"""step8：合并冻结的 step7 审核结果，并复验对人工标签敏感的门禁。
 
-G1/G5 use the reviewed three-way counts; G4 uses the reviewed yes sets.
-G2 is skipped; G3/G6 and the existing gate selection remain unchanged.
-After gating, all remaining reviewed unknown members become no: reviewers have
-already resolved every member that should be yes. Complements are root minus yes.
-No intersections are generated; original review task files remain unchanged.
+G1/G5 按审核后的三值计数复验，G4 按审核后的 yes 集合复验；G2 跳过，G3/G6
+沿用 step6 的筛选结果。门禁后，审核剩余的 unknown 统一归入 no——审核规范要求
+把应为 yes 的实例全部标为 yes，剩下的 unknown 可视为不成立。补集按 root − yes
+推导，不生成深度 2 交集；原审核任务文件保持不变。
 
     python step8_merge_review_results.py --dry-run
     python step8_merge_review_results.py
@@ -25,11 +24,11 @@ from recsub.config import CONFIG, path, resolve_dir
 from recsub.console import configure_console
 from recsub.gates import Counts, GateSettings, evaluate, select_with_redundancy
 from recsub.io import iter_jsonl, write_jsonl_atomic
+from recsub.review_items import effective_partitions
 from recsub.review_tasks import (
     BATCH_MANIFEST_NAME, load_and_validate_task, task_paths, validate_task_outputs,
 )
 from recsub.subsets import stable_id
-from step8_review_sheet import effective_partitions
 
 PARTITION_FIELDS = ("instance_ids", "negative_instance_ids", "unknown_instance_ids")
 SOURCE_FIELDS = ("yes_ids", "no_ids", "unknown_ids")
@@ -90,7 +89,7 @@ def _validate_partition(record: Mapping[str, Any], item: Mapping[str, Any]) -> N
 
 
 def _refresh_points(record: dict, item: Mapping[str, Any]) -> None:
-    """Step8 leaves point arrays unchanged after flips; align them to the edited IDs."""
+    """Step7 leaves point arrays unchanged after flips; align them to the edited IDs."""
     point_by_id = {}
     for ids_field, points_field in zip(SOURCE_FIELDS, ("yes_points", "no_points", "unknown_points")):
         ids, points = item[ids_field], item.get(points_field)
@@ -206,7 +205,7 @@ def _thresholds(settings: GateSettings) -> dict[str, Any]:
 
 def apply_gates(records: Sequence[Mapping[str, Any]], settings: GateSettings
                 ) -> tuple[list[dict], list[dict], Counter]:
-    """Reuse step6 G1/G5 and G4 ranking on reviewed partitions; skip G2/G3/G6."""
+    """按审核后的分区复验 G1/G5，并沿用 step6 的 G4 排序；跳过 G2/G3/G6。"""
     # 门禁仍按原审核三值分区计算，避免改变已选中的谓词及 G4 排序。
     # 只在门禁后导出正负集合时，将剩余 unknown 按审核约定归入 no。
     count_settings = replace(settings, max_unknown_ratio=1.0)
@@ -245,8 +244,8 @@ def apply_gates(records: Sequence[Mapping[str, Any]], settings: GateSettings
 
     for root in sorted(by_root):
         candidates = by_root[root]
-        # All proposals already survived step6's G6; raising the cap to this list length
-        # disables that gate while reusing exactly the same G4 ranking and threshold rule.
+        # 这些提案已在 step6 通过 G6；把上限放宽到列表长度即可禁用数量门禁，
+        # 同时复用完全相同的 G4 排序和阈值规则。
         selected_tuples, redundancy_rejections = select_with_redundancy(
             candidates, replace(settings, max_predicates_per_root=len(candidates)))
         for rejection in redundancy_rejections:
@@ -265,7 +264,7 @@ def apply_gates(records: Sequence[Mapping[str, Any]], settings: GateSettings
                 "balance_ok": counts.balance >= settings.min_balance,
                 "max_support_jaccard": settings.max_support_jaccard,
             }
-            # 不沿用旧 unknown_ok，避免把 step6 的检查结果误认为本次复验结果。
+            # 不沿用 step6 的 unknown_ok，避免把上游检查结果误认为本次复验结果。
             output["gates"].pop("unknown_ok", None)
             selected.append(output)
     selected.sort(key=lambda row: (row["image_idx"], row["caption"], row["review_id"]))

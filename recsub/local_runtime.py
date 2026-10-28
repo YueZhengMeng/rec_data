@@ -1,4 +1,4 @@
-"""Accelerate helpers for local, inference-only data parallel execution."""
+"""本地推理的 Accelerate 辅助：单卡模型副本、数据并行与结果按 rank 汇总。"""
 
 from __future__ import annotations
 

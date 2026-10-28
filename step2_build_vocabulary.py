@@ -52,7 +52,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="原始标注 annotations.json")
     parser.add_argument("--splits", type=Path, default=path("splits"),
                         help="数据划分 splits.json")
-    parser.add_argument("--output", type=Path, default=path("vocabulary"),
+    parser.add_argument("--output", type=Path, default=path("vocabulary_all"),
                         help="词表 JSON 输出路径")
     parser.add_argument("--markdown", type=Path, default=path("vocabulary_md"),
                         help="人工浏览用 Markdown 输出路径")
@@ -86,7 +86,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         split_keys = load_split_keys(load_json_any(args.splits), args.split)
 
-    # 核心功能函数
     entries, stats = build_vocabulary(
         annotations, split_keys=split_keys, min_root_count=args.min_root_count
     )

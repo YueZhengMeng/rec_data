@@ -3,7 +3,7 @@
 只带 ``instance_id`` 与 ``attributes``、没有图片名/caption/类别的提取记录（例如
 记录数组形式 JSON 迁移后的产物）同样可用：这里做一层归并式配对，靠 ``instance_id``
 与实例表对齐。两份文件都按 ``instance_id`` 递增排列，所以内存是 O(1)，不必先建
-28.6 万条的索引字典。
+整张实例表的索引字典。
 """
 
 from __future__ import annotations

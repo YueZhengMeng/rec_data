@@ -5,8 +5,8 @@
 2. **用规范写法发问**。同一个谓词在所有实例上问法一致（如 ``wearing helmet``
    而不是各实例自己的措辞），标签才可比。否定谓词带上 ``not``。
 3. **输出 JSONL 追加写**，可中断续跑；运行指纹写在旁挂标记文件里。
-4. **成本杠杆**：``--no-enable-thinking`` 关掉思维链（判断的 output token 由
-   思维链主导，实测均值 3187）。
+4. **成本杠杆**：判断的 output token 主要由思维链占据，``--no-enable-thinking``
+   可显著降低单实例的生成开销，是否影响准确率需要自行对照。
 
     python step5_judge_predicates_online.py --image-names 0002-fsc147-1386.jpg
     python step5_judge_predicates_online.py --no-enable-thinking

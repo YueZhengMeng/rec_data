@@ -1,10 +1,10 @@
-"""step9 人工审核：直接确认 yes，或修改属性短语后确认 yes。
+"""step10 人工审核：直接确认 yes，或修改属性短语后确认 yes。
 
-    python step9_review_captions.py
-    python step9_review_captions.py --check-only
-    python step9_review_captions.py --input anno/subset_captions_local.jsonl
+    python step10_review_captions.py
+    python step10_review_captions.py --check-only
+    python step10_review_captions.py --input anno/subset_captions_local.jsonl
 
-默认读取完整在线结果及全部历史。选用历史版本原地确认；手动编辑则追加新记录。
+默认读取完整在线结果及全部历史记录。选用历史记录原地确认；手动编辑则追加新记录。
 不调用 LLM，不改实例成员，不改写 .run.json。审核时请停止其他 step9 和分离进程。
 """
 
@@ -26,7 +26,7 @@ from recsub.console import configure_console
 
 _HTML = r"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>step9 属性短语人工审核</title>
+<title>step10 属性短语人工审核</title>
 <style>
 :root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#172b3a;background:#f2f5f8;line-height:1.6}
 *{box-sizing:border-box}body{margin:0}header{background:#183c50;color:white;padding:18px 26px}
@@ -42,7 +42,7 @@ textarea{display:block;width:100%;min-height:100px;margin:10px 0;border:1px soli
 button:disabled{opacity:.45;cursor:not-allowed}#message{white-space:pre-wrap;overflow-wrap:anywhere;min-height:27px;color:#176746}#message.error{color:#af2929}#paths{overflow-wrap:anywhere;font-size:13px;color:#627786}
 #empty{display:none}.status{font-weight:600}details pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}@media(max-width:850px){main{grid-template-columns:1fr}aside{position:static}#list{max-height:190px}.grid{grid-template-columns:1fr}}
 </style></head><body>
-<header><h1>step9 属性短语人工审核</h1><p>只处理失败、no 或未审核记录；不调用模型，不修改原属性与子集成员。</p></header>
+<header><h1>step10 属性短语人工审核</h1><p>只处理失败、no 或未审核记录；不调用模型，不修改原属性与子集成员。</p></header>
 <main><aside><b id="progress">载入中…</b><div id="list"></div></aside><section>
 <div id="empty" class="card">当前没有待人工审核的记录。</div>
 <div id="editor">
@@ -178,7 +178,7 @@ def make_server(session: CaptionReviewSession, port: int):
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="step9 本地人工审核：确认 yes 或修改属性短语后确认")
+    parser = argparse.ArgumentParser(description="step10 本地人工审核：确认 yes 或修改属性短语后确认")
     parser.add_argument("--input", type=Path, default=path("captions_online"),
                         help="完整 step9 结果；汇集全部历史，并筛选尚未通过的子集")
     parser.add_argument("--port", type=int, default=CONFIG["caption"]["review_port"])

@@ -10,7 +10,7 @@
 ``subset_decisions_log.jsonl``。这份日志不是垃圾：它告诉你某张图/某个 caption 为什么
 不可划分，也直接支撑人工审核的候选清单。
 
-可视化与人工审核分别由 step7、step8 完成；step6 的输出 ``review.status=pending``。
+人工审核由 step7 完成；step6 的输出 ``review.status=pending``。
 
     python step6_build_subsets.py --labels anno/predicate_labels.jsonl
     python step6_build_subsets.py --labels anno/predicate_labels.jsonl --max-depth 2

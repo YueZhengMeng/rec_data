@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import copy
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -124,7 +123,7 @@ def accepted_caption(record: Mapping[str, Any]) -> bool:
 
 
 def select_caption_record(previous: dict | None, current: dict) -> dict:
-    """人工确认优先于旧模型历史；否则仍按最后一条模型记录取值。"""
+    """人工确认优先于模型历史；否则仍按最后一条模型记录取值。"""
     if previous is None:
         return current
 
@@ -200,24 +199,6 @@ def completed_captions(output: Path, fingerprint: str, *, claim: bool = True,
         mismatch_message=f"{output} 属于其他合成配置；请指定新的 --output",
     )
     return completed
-
-
-def refresh_subset_metadata(record: Mapping[str, Any], subset: Mapping[str, Any]) -> dict:
-    """只刷新视觉子集元数据；保留生成文本、人工语言审核与失败状态。"""
-    node_id = subset.get("node_id") or subset.get("review_id")
-    if node_id != (record.get("node_id") or record.get("review_id")):
-        raise ValueError("子集 ID 不一致，不能刷新 step9 元数据")
-    if any(record.get(key) != subset.get(key) for key in ("image_name", "caption", "category")):
-        raise ValueError(f"{node_id} 的根 caption/类别已改变，不能直接复用生成文本")
-    if record.get("additional_attribute") != (subset.get("predicate") or {}).get("display"):
-        raise ValueError(f"{node_id} 的新增属性已改变，需要重新审核文本")
-    text_fields = {"original_attributes", "additional_attribute", "new_attributes", "new_caption",
-                   "string_check", "original_attributes_in_new", "additional_attribute_in_new",
-                   "accepted", "language_check", "language_check_source", "manual_review",
-                   "failed", "reason", "generation_usage", "review_usage", "input_tokens", "output_tokens"}
-    if text_fields & set(subset):
-        raise ValueError(f"{node_id} 的最终子集混入了文本结果字段，拒绝覆盖")
-    return {**record, **copy.deepcopy(dict(subset))}
 
 
 def validate_paths(args) -> None:

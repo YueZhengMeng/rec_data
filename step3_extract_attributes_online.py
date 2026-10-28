@@ -24,8 +24,8 @@ from recsub.io import close_all, get_writer, iter_jsonl, write_json_atomic
 from recsub.llm_api import OnlineModel, build_cropper, load_three_views
 from recsub.online_batch import run_online_batch
 from recsub.prompts import (
-    EXTRACT_ATTRIBUTES_PROMPT, build_extract_attributes_prompt, )
-from recsub.prompts import build_instance_messages
+    EXTRACT_ATTRIBUTES_PROMPT, build_extract_attributes_prompt, build_instance_messages,
+)
 
 
 def fingerprint_for(args: argparse.Namespace) -> str:

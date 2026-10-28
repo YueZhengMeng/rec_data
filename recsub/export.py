@@ -1,7 +1,8 @@
-"""将最终审核子集与 step9 文本导出为独立的 REC-8K 风格标注和划分。
+"""将最终审核子集与 step9 文本导出为独立的 REC-8K 风格标注。
 
 annotations_subset 只含新子集，不混入原标注；每条记录保存 root_caption。
-成员以最终子集 instance_ids 为准，从实例表及原标注校验坐标，不用旧 yes_points。
+成员以最终子集 instance_ids 为准，从实例表及原标注校验坐标，不用子集记录中的
+yes_points。原始 split 只用于只读校验和统计，不写新的划分文件。
 """
 
 from __future__ import annotations
@@ -87,26 +88,26 @@ def validate_original(annotations: Mapping, splits: Mapping) -> dict[Root, str]:
     return by_root
 
 
-def validate_subset_splits(annotations: Mapping, splits: Mapping) -> None:
-    """Validate the subset split format: exactly three lists of image names."""
+def _validate_export_images(annotations: Mapping, splits: Mapping) -> None:
+    """校验本次导出的图片在每个 split 中只出现一次且完整覆盖。"""
     required = ("train", "val", "test")
     if tuple(splits) != required:
-        raise ValueError(f"子集 splits 必须按顺序只含 train/val/test，实际为 {list(splits)}")
+        raise ValueError(f"导出图片划分必须按顺序只含 train/val/test，实际为 {list(splits)}")
     seen: dict[str, str] = {}
     for split in required:
         images = splits[split]
         if not isinstance(images, list):
-            raise ValueError(f"splits_subset[{split!r}] 必须是图片名列表")
+            raise ValueError(f"导出图片划分[{split!r}] 必须是图片名列表")
         for image in images:
             if not isinstance(image, str) or not image:
-                raise ValueError(f"splits_subset[{split!r}] 含无效图片名：{image!r}")
+                raise ValueError(f"导出图片划分[{split!r}] 含无效图片名：{image!r}")
             if image not in annotations:
-                raise ValueError(f"splits_subset[{split!r}] 的图片没有子集标注：{image}")
+                raise ValueError(f"导出图片划分[{split!r}] 的图片没有子集标注：{image}")
             if image in seen:
-                raise ValueError(f"子集图片跨 split 或重复：{image} ({seen[image]}, {split})")
+                raise ValueError(f"导出图片跨 split 或重复：{image} ({seen[image]}, {split})")
             seen[image] = split
     if set(seen) != set(annotations):
-        raise ValueError("子集划分未完整覆盖子集标注中的图片")
+        raise ValueError("导出图片划分未完整覆盖子集标注中的图片")
 
 
 def subset_relations(subsets: Mapping[str, dict]) -> tuple[dict[str, str], dict[str, str]]:
@@ -116,7 +117,7 @@ def subset_relations(subsets: Mapping[str, dict]) -> tuple[dict[str, str], dict[
     for node_id, subset in subsets.items():
         polarity = (subset.get("predicate") or {}).get("polarity")
         complement_of = subset.get("complement_of")
-        if polarity not in (None, "positive", "negative"):
+        if polarity not in ("positive", "negative"):
             raise ValueError(f"{node_id} 的谓词 polarity 无效：{polarity}")
         if complement_of is not None:
             if not isinstance(complement_of, str) or not complement_of:
@@ -127,7 +128,6 @@ def subset_relations(subsets: Mapping[str, dict]) -> tuple[dict[str, str], dict[
         elif polarity == "negative":
             raise ValueError(f"{node_id} 是负集但缺少 complement_of，无法关联正集")
         else:
-            # 兼容早期未显式保存 polarity 的正向节点。
             polarities[node_id] = "yes"
     for node_id, subset in subsets.items():
         if polarities[node_id] != "no":
@@ -147,8 +147,8 @@ def subset_relations(subsets: Mapping[str, dict]) -> tuple[dict[str, str], dict[
 
 
 def build_rec8k_subsets(*, annotations_path: Path, splits_path: Path, subsets_path: Path,
-                        captions_path: Path, instances_path: Path) -> tuple[dict, dict, dict]:
-    """纯数据变换：只返回新子集，图片/根 caption 顺序沿用原标注。"""
+                        captions_path: Path, instances_path: Path) -> tuple[dict, dict]:
+    """纯数据变换：只返回新子集标注和统计，图片/根 caption 顺序沿用原标注。"""
     original = _read_json(annotations_path)
     original_splits = _read_json(splits_path)
     root_splits = validate_original(original, original_splits)
@@ -278,9 +278,9 @@ def build_rec8k_subsets(*, annotations_path: Path, splits_path: Path, subsets_pa
         annotations[subsets[node_id]["image_name"]][caption]["complement_caption"] = partner_caption
         counters["linked_subsets" if partner_caption is not None else "unlinked_subsets"] += 1
     # 图片列表去重、互斥且恰好覆盖本次导出的子集图片。
-    validate_subset_splits(annotations, splits)
+    _validate_export_images(annotations, splits)
     counters["exported_images"] = len(annotations)
     report = {"counts": dict(counters), "split_counts": {key: len(value) for key, value in splits.items()},
               "type_policy": "inherit_root_caption", "order_policy": "source_images_then_root_captions",
               "skipped": skipped}
-    return annotations, splits, report
+    return annotations, report

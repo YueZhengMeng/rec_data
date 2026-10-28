@@ -6,7 +6,8 @@
 本脚本流式解析源文件（兼容 JSONL、顶层数组、首尾相接 JSON 流三种写法），
 逐条 ``json.dumps`` 后写一行，默认原地原子替换；已经是一行一条的文件默认跳过。
 
-    python fix_jsonl_format.py                    # 修复 anno/ 下所有 .jsonl
+    python fix_jsonl_format.py                    # 递归修复当前目录下所有 .jsonl
+    python fix_jsonl_format.py --no-recursive     # 只处理当前目录一层
     python fix_jsonl_format.py anno path/to/data  # 指定多个目录/文件
     python fix_jsonl_format.py --dry-run          # 只统计条数，不写文件
     python fix_jsonl_format.py --output-dir anno_fixed   # 另存，不改原文件
@@ -21,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from recsub.config import PROJECT_ROOT, resolve_dir
+from recsub.config import resolve_dir
 from recsub.console import configure_console
 from recsub.io import iter_json_records
 
@@ -32,11 +33,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="把缩进 JSON 形式的 .jsonl 重新保存为一行一条记录")
     parser.add_argument("paths", nargs="*", type=Path,
-                        help="待处理的文件或目录；默认 anno")
+                        help="待处理的文件或目录；默认当前目录")
     parser.add_argument("--pattern", default="*.jsonl",
                         help="目录下的文件名匹配模式（默认 *.jsonl）")
-    parser.add_argument("--recursive", action="store_true",
-                        help="递归搜索子目录")
+    parser.add_argument("--recursive", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="递归搜索子目录（默认开启；--no-recursive 只处理一层）")
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="统一输出目录；默认原地原子替换")
     parser.add_argument("--force", action="store_true",
@@ -45,7 +47,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="只解析并统计，不写任何文件")
     args = parser.parse_args(argv)
     if not args.paths:
-        args.paths = [PROJECT_ROOT / "review/review_09"]
+        args.paths = [Path.cwd()]
     return args
 
 
@@ -120,7 +122,12 @@ def collect_files(paths: Iterable[Path], pattern: str, recursive: bool) -> list[
         path = resolve_dir(raw)
         if path.is_dir():
             matches = path.rglob(pattern) if recursive else path.glob(pattern)
-            candidates = sorted(match for match in matches if match.is_file())
+            # 递归时跳过 .git、.idea 等隐藏目录，避免把仓库元数据当成数据文件。
+            candidates = sorted(
+                match for match in matches
+                if match.is_file()
+                and not any(part.startswith(".") for part in match.relative_to(path).parts)
+            )
         elif path.is_file():
             candidates = [path]
         else:

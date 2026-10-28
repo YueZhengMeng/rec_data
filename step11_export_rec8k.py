@@ -1,7 +1,7 @@
-"""step10：只导出独立 annotations_subset.json，不合并原标注、不写划分文件。
+"""step11：只导出独立 annotations_subset.json，不合并原标注、不写划分文件。
 
-    python step10_export_rec8k.py
-    python step10_export_rec8k.py --captions anno/subset_captions_local.jsonl --dry-run
+    python step11_export_rec8k.py
+    python step11_export_rec8k.py --captions anno/subset_captions_local.jsonl --dry-run
 
 标注沿用 图片 → 新 caption → class/attribute/points/type 的格式，额外保存
 root_caption、subset_polarity（yes/no）和 complement_caption；不保存 subset_id。
@@ -52,7 +52,7 @@ def run(args: argparse.Namespace) -> int:
         if not source.is_file():
             hint = "；请先运行 step9 或用 --captions 指定其结果" if name == "captions" else ""
             raise FileNotFoundError(f"找不到 {name}：{source}{hint}")
-    annotations, _, report = build_rec8k_subsets(
+    annotations, report = build_rec8k_subsets(
         annotations_path=args.annotations, splits_path=args.splits, subsets_path=args.subsets,
         captions_path=args.captions, instances_path=args.instances,
     )

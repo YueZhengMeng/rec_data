@@ -2,9 +2,9 @@
 
 为什么统一用 JSONL
 ------------------
-实例表和提取结果分别有 28.6 万条记录（108MB / 251MB）。若每写一条结果都要
-「读回整个文件 → 追加 → 整体写回」，IO 在 28.6 万条上是 O(n²)，会先于 API 成为
-瓶颈；追加一行 JSONL 只写一行，且天然支持中断续跑。
+实例表和提取结果都有数十万条记录。若每写一条结果都要「读回整个文件 → 追加 →
+整体写回」，IO 会随记录数呈 O(n²) 增长，先于 API 成为瓶颈；追加一行 JSONL 只写
+一行，且天然支持中断续跑。
 
 :func:`load_json_any` 按后缀自动选择读取器，``.json`` 产物不转换也能直接读；
 ``python -m recsub.io migrate`` 则把记录数组形式的 JSON 转成 JSONL（流式解析，
@@ -38,7 +38,7 @@ _WHITESPACE = " \t\r\n"
 def iter_jsonl(path: str | Path, *, strict: bool = True) -> Iterator[dict]:
     """流式逐行读取 JSONL。
 
-    内存占用与文件大小无关，因此可以直接读 251MB 的提取结果。
+    内存占用与文件大小无关，因此可以直接读数百 MB 的提取结果。
     ``strict=False`` 时跳过损坏行并打印告警，用于容忍被中断的追加写入。
     """
     path = Path(path)
@@ -80,7 +80,7 @@ def load_json_any(path: str | Path) -> Any:
 
 
 def _iter_json_array_stream(handle, *, label: str = "<stream>") -> Iterator[Any]:
-    """流式解析顶层 JSON 数组，避免把 251MB 一次性读进内存。
+    """流式解析顶层 JSON 数组，避免把数百 MB 一次性读进内存。
 
     做法是维持一个滑动缓冲区：每次成功解析一个元素后就丢弃已消费的前缀，
     缓冲区只在单个元素超过一个 chunk 时才增长。
@@ -155,7 +155,7 @@ def iter_json_records(path: str | Path) -> Iterator[Any]:
     * 缩进 JSON 记录首尾相接的「JSON 流」——每条记录 ``indent=2`` 后直接续写，
       文件后缀仍可能是 ``.jsonl``，逐行解析会失败。
 
-    源文件 251MB 也不会整体载入：维持滑动缓冲区，每解析出一条记录就丢弃
+    源文件数百 MB 也不会整体载入：维持滑动缓冲区，每解析出一条记录就丢弃
     已消费的前缀。记录之间允许空白（数组内额外允许逗号）。
     """
     label = str(path)
@@ -232,89 +232,6 @@ def _iter_json_value_stream(handle, *, label: str = "<stream>") -> Iterator[Any]
         yield value
 
 
-def iter_json_object_items(path: str | Path) -> Iterator[tuple[str, Any]]:
-    """流式读取顶层为对象的 JSON，逐对产出 ``(key, value)``。
-
-    用于「图片 → caption → 记录」这类嵌套产物（例如 step4 的候选 JSON）：
-    一次只把一个键的值解析进内存，139MB 的文件也不会整体载入。
-    """
-    label = str(path)
-    with Path(path).open("r", encoding="utf-8") as handle:
-        yield from _iter_json_object_items_stream(handle, label=label)
-
-
-def _iter_json_object_items_stream(handle, *,
-                                   label: str = "<stream>") -> Iterator[tuple[str, Any]]:
-    """``iter_json_object_items`` 的底层实现。"""
-    decoder = json.JSONDecoder()
-    buffer = ""
-    position = 0
-    eof = False
-
-    def read_more() -> bool:
-        """读入下一块并丢弃已消费前缀；返回 False 表示到文件末尾。"""
-        nonlocal buffer, position, eof
-        chunk = handle.read(_CHUNK_SIZE)
-        if not chunk:
-            eof = True
-            return False
-        if position:
-            buffer = buffer[position:]
-            position = 0
-        buffer += chunk
-        return True
-
-    def skip_whitespace() -> bool:
-        """跳过空白；返回是否还有字符可读。"""
-        nonlocal position
-        while True:
-            while position < len(buffer) and buffer[position] in _WHITESPACE:
-                position += 1
-            if position < len(buffer):
-                return True
-            if eof:
-                return False
-            read_more()
-
-    def parse_value() -> Any:
-        """解析 ``position`` 处的下一个完整值，必要时继续读文件。"""
-        nonlocal position
-        while True:
-            try:
-                value, end = decoder.raw_decode(buffer, position)
-            except json.JSONDecodeError:
-                if not read_more():
-                    raise ValueError(f"{label}: 偏移 {position} 处的值无法解析") from None
-                continue
-            position = end
-            return value
-
-    if not skip_whitespace():
-        raise ValueError(f"{label}: 文件为空")
-    if buffer[position] != "{":
-        raise ValueError(f"{label}: 顶层不是 JSON 对象")
-    position += 1
-
-    while True:
-        if not skip_whitespace():
-            raise ValueError(f"{label}: 对象未闭合")
-        char = buffer[position]
-        if char == "}":
-            return
-        if char == ",":
-            position += 1
-            continue
-        key = parse_value()
-        if not isinstance(key, str):
-            raise ValueError(f"{label}: 键必须是字符串")
-        if not skip_whitespace() or buffer[position] != ":":
-            raise ValueError(f"{label}: 键 {key!r} 后缺少冒号")
-        position += 1
-        if not skip_whitespace():
-            raise ValueError(f"{label}: 键 {key!r} 缺少值")
-        yield key, parse_value()
-
-
 # --------------------------------------------------------------------------
 # 写
 # --------------------------------------------------------------------------
@@ -358,21 +275,6 @@ def write_jsonl_atomic(path: str | Path, records: Iterable[dict]) -> int:
         temporary.unlink(missing_ok=True)
         raise
     return count
-
-
-def append_jsonl(path: str | Path, record: dict, *, fsync: bool = False) -> None:
-    """同步追加一行，带线程锁；供非异步步骤使用。"""
-    path = ensure_parent(path)
-    line = json.dumps(record, **_JSONL_KWARGS) + "\n"
-    with _SYNC_LOCK:
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(line)
-            handle.flush()
-            if fsync:
-                os.fsync(handle.fileno())
-
-
-_SYNC_LOCK = threading.Lock()
 
 
 class JsonlWriter:
@@ -499,7 +401,7 @@ def migrate_json_to_jsonl(source: str | Path, destination: str | Path, *,
                           overwrite: bool = False) -> int:
     """把「记录数组」形式的 JSON 迁移成 JSONL。
 
-    流式解析源文件，因此 251MB 的提取结果也不会把内存吃满。写出前校验条数，
+    流式解析源文件，因此数百 MB 的提取结果也不会把内存吃满。写出前校验条数，
     数量不符则删除临时文件并报错，避免半成品覆盖好数据。
     """
     source, destination = Path(source), Path(destination)

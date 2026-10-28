@@ -1,7 +1,9 @@
-"""分离 step5 本地谓词判断中的失败记录。
+"""分离 step5 谓词判断中的失败记录。
 
-默认将 ``judgment_failed`` 或 ``judgment_missing`` 记录写入
-``anno/predicate_labels_local_failed.jsonl``，并将原文件替换为仅含成功判断的记录。
+输入默认是 ``anno/predicate_labels.jsonl``（在线结果）；将 ``judgment_failed``
+或 ``judgment_missing`` 记录写入同目录的 ``predicate_labels_failed.jsonl``，并将
+原文件替换为仅含成功判断的记录。本地结果可用
+``--input anno/predicate_labels_local.jsonl`` 指定。
 
     python step5_split_failed_judgments.py
     python step5_split_failed_judgments.py --input anno/predicate_labels_local.jsonl \
@@ -26,7 +28,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="分离 step5 判断失败记录，原 JSONL 保留成功记录"
     )
     parser.add_argument("--input", type=Path, default=path("predicate_labels_online"),
-                        help="step5 本地判断结果 JSONL")
+                        help="step5 判断结果 JSONL（本地结果请显式指定）")
     parser.add_argument("--failed-output", type=Path, default=None,
                         help="失败记录输出；默认在输入文件名后加 _failed")
     return parser.parse_args(argv)

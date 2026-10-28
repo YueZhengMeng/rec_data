@@ -1,4 +1,9 @@
-"""Backend-independent candidate loading and predicate-judgment helpers."""
+"""step5 在线与本地入口共用的候选读取、三值标签解析与续跑辅助。
+
+候选文件支持 step4 的 JSONL 和图片 → caption 的嵌套 JSON；判断标签按谓词
+``display`` 写入，再由 :func:`expand_labels` 展开为 ``predicate_id``，使在线与
+本地两条后端产生相同的记录结构。
+"""
 
 from __future__ import annotations
 

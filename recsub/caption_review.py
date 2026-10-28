@@ -1,4 +1,4 @@
-"""step9 人工语言审核：历史记录原地确认，手工修改追加新记录。"""
+"""step10 人工语言审核：历史记录原地确认，手工修改追加新记录。"""
 
 from __future__ import annotations
 
@@ -61,12 +61,12 @@ def _stamp(path: Path) -> tuple:
 
 
 class CaptionReviewSession:
-    """单人单文件审核，历史候选和人工结果始终留在同一份完整 step9 结果中。"""
+    """单人单文件审核，历史候选和人工结果始终留在同一份完整合成结果中。"""
 
     def __init__(self, input_path: Path):
         self.input_path = input_path.resolve()
         if not self.input_path.is_file():
-            raise FileNotFoundError(f"找不到 step9 输入：{self.input_path}")
+            raise FileNotFoundError(f"找不到属性短语合成结果：{self.input_path}")
         self.lock = threading.Lock()
         self.stamp = _stamp(self.input_path)
         latest = load_nodes(self.input_path, latest=True)

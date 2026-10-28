@@ -153,7 +153,7 @@ class ConfidenceRecorder(LogitsProcessor):
 
 
 class LocalAttributesExtractor:
-    """使用本地 Qwen3.5 模型提取单个实例的可见属性。"""
+    """使用本地 Qwen3.5 模型批量生成属性或判断文本。"""
 
     def __init__(
             self,
@@ -222,11 +222,6 @@ class LocalAttributesExtractor:
 
     def _get_device_map(self):
         """让每个 Accelerate 进程只在对应的单张 GPU 上加载模型。"""
-        if self.device.index != self.accelerator.local_process_index:
-            raise RuntimeError(
-                f"rank 设备不匹配：Accelerate={self.device}, "
-                f"local_process_index={self.accelerator.local_process_index}"
-            )
         return {"": self.device}
 
     @staticmethod

@@ -1,7 +1,8 @@
-"""集中配置：路径、在线与本地模型、裁剪、词表、归一化、门禁、审核与可视化。
+"""集中配置：路径、在线与本地模型、裁剪、词表、归一化、门禁与审核。
 
-各步骤脚本的 argparse 默认值一律取自这里，命令行参数只用于覆盖单次运行，因此
-调整默认行为改这一个文件即可。少数默认值允许用环境变量覆盖，见各条注释。
+各步骤脚本的 argparse 默认值集中取自这里，命令行参数只用于覆盖单次运行，因此
+调整默认行为改这一个文件即可。少数默认值允许用环境变量覆盖，见各条注释；仅在
+单一入口使用的结构参数（如审核任务分片数）仍保留在对应脚本里。
 
 所有路径都相对项目根目录（本包所在目录的上一级）解析，所以从任意工作目录运行
 步骤脚本都能找到数据。
@@ -51,7 +52,7 @@ CONFIG: dict[str, Any] = {
     "image_dir": _env("REC_IMAGE_DIR", "F:/REC-8K/rec-8k/"),
 
     # ---- 本地 Qwen 后端 ----
-    # step3 与 step5 的两个本地入口共用这一套参数，模型与生成设置只有这一处默认值。
+    # step3/step5/step9 的三个本地入口共用这一套参数，模型与生成设置只有这一处默认值。
     "local": {
         "model_path": _env("REC_LOCAL_MODEL", "F:/model/Qwen3.5-0.8B"),
         "base_model_path": None,  # None 表示与 model_path 相同
@@ -78,10 +79,9 @@ CONFIG: dict[str, Any] = {
         "splits": "anno/splits.json",
         # step1 产出：实例表
         "instance_data": "anno/instance_data.jsonl",
-        # step2 产出：标注词表；vocabulary 是 step2 --split all 的默认输出
-        "vocabulary": "anno/attribute_vocabulary_all.json",
-        "vocabulary_train": "anno/attribute_vocabulary_train.json",
+        # step2 产出：标注词表；all 是 --split all 的默认输出，train 供训练根使用
         "vocabulary_all": "anno/attribute_vocabulary_all.json",
+        "vocabulary_train": "anno/attribute_vocabulary_train.json",
         "vocabulary_md": "anno/attribute_vocabulary_all.md",
         "vocabulary_overrides": "anno/vocabulary_overrides_all.json",
         # step3 产出：开放提取结果，在线与本地各一份
@@ -97,22 +97,20 @@ CONFIG: dict[str, Any] = {
         # step5 产出：三值判断
         "predicate_labels_online": "anno/predicate_labels.jsonl",
         "predicate_labels_local": "anno/predicate_labels_local.jsonl",
-        # step6 产出：门禁筛选后的子集
+        # step6 产出：门禁筛选后的子集与拒绝日志
         "subsets": "anno/fine_grained_subsets.jsonl",
         "subset_decisions": "anno/subset_decisions_log.jsonl",
-        "review_subset_decisions": "anno/review_subset_decisions_log.jsonl",
-        # step7 产出：子集可视化
-        "output_dir": "show_subsets",
-        # step8 产出：人工审核与最终子集
+        # step7 产出：人工审核状态、任务目录与单人审核最终子集
         "review_dir": "review",
         "subsets_final": "anno/fine_grained_subsets_final.jsonl",
-        # step9 输入与产出：保留人工合并子集，另存合成文本及检查结果
+        # step8 产出：审核汇总后的最终子集与复验日志；前者也是 step9 默认输入
         "caption_subsets": "anno/final_subsets.jsonl",
+        "review_subset_decisions": "anno/review_subset_decisions_log.jsonl",
+        # step9 产出：合成文本、字符串检查与语言审核结果
         "captions_online": "anno/subset_captions.jsonl",
         "captions_local": "anno/subset_captions_local.jsonl",
-        # step10 独立导出；不修改原 annotations/splits
+        # step11 独立导出；不修改原 annotations/splits
         "annotations_subset": "anno/annotations_subset.json",
-        "splits_subset": "anno/splits_subset.json",
     },
 
     # ---- 在线调用 ----
@@ -155,11 +153,11 @@ CONFIG: dict[str, Any] = {
         "max_preview": 100,
     },
 
-    # ---- step9 属性短语/caption 合成 ----
+    # ---- step9 属性短语合成与 step10 人工审核 ----
     "caption": {
         "limit": 0,  # 0 表示全量；先截取再排除已完成 ID
         "presence_penalty_local": 0.0,  # 允许合成时原样复用属性词
-        "review_port": 8766,  # step9 本机人工语言审核页面
+        "review_port": 8766,  # step10 本机人工语言审核页面
     },
 
     # ---- step3 / step5 / step9 续跑策略（不影响模型输入，不纳入运行指纹）----
@@ -246,13 +244,6 @@ CONFIG: dict[str, Any] = {
     "review": {
         "host": "127.0.0.1",
         "port": 8765,
-    },
-
-    # ---- 可视化 ----
-    "visualize": {
-        "max_width": 1100,
-        "max_height": 850,
-        "sidebar_width": 520,
     },
 }
 

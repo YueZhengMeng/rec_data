@@ -52,7 +52,7 @@ MARKER_STYLES: tuple[str, ...] = ("ring", "outline")
 # ============================================================
 @dataclass(frozen=True, slots=True)
 class CropConfig:
-    """Configuration for point-guided adaptive crops."""
+    """点引导自适应裁剪的参数与校验。"""
 
     # 近邻数量和最少有效邻点共同决定是否信任局部密度。
     neighbor_k: int = 5
@@ -150,27 +150,13 @@ class CropConfig:
 
 @dataclass(frozen=True, slots=True)
 class CropBox:
-    """A PIL-compatible half-open crop box."""
+    """PIL 风格的半开区间裁剪框。"""
 
-    # PIL 的 right/bottom 是开区间，因此 width=right-left。
+    # PIL 的 right/bottom 是开区间，因此宽高分别为 right-left、bottom-top。
     left: int
     top: int
     right: int
     bottom: int
-
-    @property
-    def width(self) -> int:
-        return self.right - self.left
-
-    @property
-    def height(self) -> int:
-        return self.bottom - self.top
-
-    @property
-    def side(self) -> int:
-        if self.width != self.height:
-            raise ValueError("crop box is not square")
-        return self.width
 
     def as_tuple(self) -> tuple[int, int, int, int]:
         return self.left, self.top, self.right, self.bottom
@@ -223,7 +209,7 @@ class _DensityEstimate:
 
 
 class AdaptiveCropper:
-    """Build density-aware Fine and Context crops around annotated points."""
+    """按同图同类别近邻密度，为标注点生成 Full/Context/Fine 三视图。"""
 
     # 该对象建立后只读，可安全地在多个异步请求之间共享。
 
@@ -248,7 +234,7 @@ class AdaptiveCropper:
             instances: Iterable[Mapping[str, Any]],
             config: CropConfig | None = None,
     ) -> AdaptiveCropper:
-        """Build a read-only same-image, same-category density index once."""
+        """用完整实例表建立只读的「同图同类别」密度索引。"""
         resolved_config = config or CropConfig()
         point_groups: dict[GroupKey, set[Point]] = defaultdict(set)
 
@@ -288,7 +274,7 @@ class AdaptiveCropper:
             category: str,
             point: tuple[float, float] | list[float],
     ) -> AdaptiveCrops:
-        """Create a marked Full image, marked Context crop, and unmarked Fine crop."""
+        """生成带标记的 Full/Context 图和不带标记的 Fine 图。"""
         width, height = image.size
         if width < 1 or height < 1:
             raise ValueError("image must have positive dimensions")

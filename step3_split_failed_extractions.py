@@ -1,7 +1,8 @@
 """把 step3 提取 JSONL 中的失败记录分离到独立文件。
 
-默认将失败记录写入 ``anno/extract_result_local_failed.jsonl``，并原子替换输入文件，
-使输入中仅保留成功记录。
+输入默认是 ``anno/extract_result.jsonl``（在线结果）；将 ``failed: true`` 的记录
+写入同目录的 ``extract_result_failed.jsonl``，并原子替换输入文件，使输入中仅保留
+成功记录。本地结果可用 ``--input anno/extract_result_local.jsonl`` 指定。
 
     python step3_split_failed_extractions.py
     python step3_split_failed_extractions.py --input anno/extract_result_local.jsonl \\

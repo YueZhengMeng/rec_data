@@ -1,11 +1,11 @@
-"""step8：REC-8K 本地单人浏览器审核工具。
+"""step7：REC-8K 本地单人浏览器审核工具。
 
 从 step6 的正向子集生成审核条目，并在 loopback 浏览器界面展示原图与实例点。
 可按 source ``image_idx`` 左闭右开区间审核，拖框选择点并翻转 yes/no。
 审核状态实时保存在单个 JSONL 文件中，支持确认保留、废弃、不确定及跳过已审核。
 仅保存经过审核操作的子集结果；同一子集保留最新记录，unknown 留待二次审核。
 
-    python step8_review_sheet.py --start 1000 --end 2000
+    python step7_review_sheet.py --start 1000 --end 2000
 """
 
 from __future__ import annotations
@@ -25,10 +25,10 @@ from typing import Any, Mapping, Sequence
 from recsub.config import CONFIG, path, resolve_dir
 from recsub.console import configure_console
 from recsub.io import iter_jsonl, write_jsonl_atomic
+from recsub.review_items import effective_partitions, load_subset_nodes
 from recsub.review_tasks import (
     claim_task_outputs, load_and_validate_task, prepare_review_tasks, validate_task_state,
 )
-from recsub.subset_visualization import load_subset_nodes
 
 
 def build_review_items(subsets_path: Path, instances_path: Path | None = None) -> list[dict]:
@@ -138,22 +138,6 @@ def save_review_state(state_path: Path, states: dict[str, dict[str, Any]]) -> No
     write_jsonl_atomic(state_path, saved.values())
     states.clear()
     states.update(saved)
-
-
-def effective_partitions(item: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, list[int]]:
-    """Apply explicit yes/no flips without changing unknown instances."""
-    yes = set(map(int, item.get("yes_ids", ())))
-    no = set(map(int, item.get("no_ids", ())))
-    unknown = set(map(int, item.get("unknown_ids", ())))
-    for raw_id, label in (state.get("labels") or {}).items():
-        instance_id = int(raw_id)
-        if instance_id not in yes | no | unknown or label not in {"yes", "no"}:
-            continue
-        yes.discard(instance_id)
-        no.discard(instance_id)
-        unknown.discard(instance_id)
-        (yes if label == "yes" else no).add(instance_id)
-    return {"yes_ids": sorted(yes), "no_ids": sorted(no), "unknown_ids": sorted(unknown)}
 
 
 def finalize_items(items: Sequence[Mapping[str, Any]], states: Mapping[str, Mapping[str, Any]],
@@ -365,7 +349,7 @@ document.addEventListener('keydown',async e=>{
 
 
 class ReviewHandler(http.server.BaseHTTPRequestHandler):
-    server_version = "RECReview/2.0"
+    server_version = "RECReview"
 
     @property
     def state(self) -> dict[str, Any]:
@@ -551,7 +535,7 @@ def serve(items: Sequence[dict], image_dir: Path, state_path: Path,
 # CLI
 # --------------------------------------------------------------------------
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="REC-8K step8 本地单人子集审核")
+    parser = argparse.ArgumentParser(description="REC-8K step7 本地单人子集审核")
     parser.add_argument("--subsets", type=Path, default=path("subsets"))
     parser.add_argument("--instances", type=Path, default=path("instance_data"),
                         help="step1 实例表，用于恢复 source image_idx")

@@ -10,8 +10,8 @@
    去会吃掉「鞋带是白的」这个新信息，最后因为与父属性同义而被丢掉。
 
 最后有一道**硬过滤**：归一化结果等于父 caption 自身槽位的候选一律丢弃。这条由
-代码判定、不问 LLM，因为原数据里 253 个「caption－候选词」组合有 55 个是
-``green pen → green barrel`` 这类与父属性同义的全 yes。
+代码判定、不问 LLM：``green pen → green barrel`` 这类候选与父属性同义，若保留会
+让判断阶段对「已经写进 caption 的属性」重复提问。
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from recsub.vocabulary import (
     normalize_surface,
 )
 
-# 合并方式，越靠前越可信。step6 与消融分析会用到这个字段。
+# 合并方式，越靠前越可信；同一谓词被多次命中时保留最可信的一种。
 METHOD_EXACT = "exact"
 METHOD_RULE = "rule"
 METHOD_VALUE = "value"
@@ -47,16 +47,16 @@ CANDIDATE_TIERS = ("same_category_similar", "cross_category_similar",
 
 
 def flatten_candidates(entry: Mapping[str, Any]) -> list[dict]:
-    """读取紧凑的三类候选；没有 ``candidates`` 时退回去读扁平的 ``predicates`` 列表。"""
-    if "candidates" in entry:
-        groups = entry["candidates"]
-        return [{**item, "selection_tier": tier,
-                 "category": item.get("category") or entry.get("category") or "",
-                 "verb": item.get("verb"),
-                 "polarity": item.get("polarity") or "positive"}
-                for tier in CANDIDATE_TIERS
-                for item in groups.get(tier, ())]
-    return list(entry.get("predicates") or ())
+    """把三类候选展平，并补上判断阶段需要的默认字段。"""
+    groups = entry.get("candidates")
+    if not isinstance(groups, Mapping):
+        raise ValueError("候选记录缺少 candidates；请用当前 step4 重新生成")
+    return [{**item, "selection_tier": tier,
+             "category": item.get("category") or entry.get("category") or "",
+             "verb": item.get("verb"),
+             "polarity": item.get("polarity") or "positive"}
+            for tier in CANDIDATE_TIERS
+            for item in groups.get(tier, ())]
 
 
 def extracted_attributes(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -96,9 +96,7 @@ class Candidate:
     merge_method: str
     raw_phrases: tuple[str, ...]
     instance_count: int
-    field: str
     selection_tier: str = ""
-    selection_rank: int = 0
     supporting_ids: set[int] = field(default_factory=set, repr=False)
 
     @property
@@ -478,7 +476,7 @@ class PredicateNormalizer:
                     merge_method=method or METHOD_EXACT,
                     raw_phrases=item.raw_phrases or (item.phrase,),
                     instance_count=item.instance_count,
-                    field=item.field, supporting_ids=set(item.instance_ids),
+                    supporting_ids=set(item.instance_ids),
                 )
             else:
                 existing.raw_phrases = tuple(dict.fromkeys(
@@ -574,7 +572,7 @@ def assemble_budgeted_candidates(result: CaptionResult, vocabulary: Vocabulary,
                 predicate_id=entry.predicate_id, category=entry.category,
                 dimension=entry.dimension, value=entry.value, verb=entry.verb,
                 polarity=entry.polarity, merge_method="unmentioned",
-                raw_phrases=(), instance_count=0, field="",
+                raw_phrases=(), instance_count=0,
             ))
 
     tiers = (("same_category_similar", similar_same),
@@ -591,7 +589,6 @@ def assemble_budgeted_candidates(result: CaptionResult, vocabulary: Vocabulary,
             seen.add(candidate.predicate_id)
             if len(selected) < budget:
                 candidate.selection_tier = tier
-                candidate.selection_rank = len(selected) + 1
                 selected.append(candidate)
                 selected_count += 1
             else:
