@@ -6,10 +6,9 @@
 
 两处设计取舍：
 
-1. **标记样式**。``marker_style="outline"`` 用更小的环、更细的描边、更窄的白色
-   高光与更短的引线，尽量少覆盖判定要看的像素；``"ring"`` 是另一套样式，环更大、
-   高光更宽、引线更长。标注只有一个点、**无法求出目标的真实轮廓**，所以这里能做
-   的只是「少遮挡」，不是「沿物体描边」。
+1. **标记样式**。用更小的环、更细的描边、更窄的白色高光与更短的引线，尽量少覆盖
+   判定要看的像素。标注只有一个点、**无法求出目标的真实轮廓**，所以这里能做的
+   只是「少遮挡」，不是「沿物体描边」。
 2. **局部视图分辨率**。fine / context 的输出边长是可调的：像素越多，密集场景里小
    目标的部件越清楚，token 与显存开销也越大。
 
@@ -43,8 +42,6 @@ ScaleSource = Literal[
     "missing_group_fallback",
     "missing_target_fallback",
 ]
-MarkerStyle = Literal["ring", "outline"]
-MARKER_STYLES: tuple[str, ...] = ("ring", "outline")
 
 
 # ============================================================
@@ -73,19 +70,10 @@ class CropConfig:
     full_max_size: int = 1333
 
     # ---- 标记 ----
-    marker_style: MarkerStyle = "outline"
     marker_color: tuple[int, int, int, int] = (255, 32, 32, 235)
     marker_halo_color: tuple[int, int, int, int] = (255, 255, 255, 245)
 
-    # ring 样式的参数：环更大、白色高光更宽、引线更长。
-    marker_radius_ratio: float = 0.025
-    marker_radius_min: int = 6
-    marker_radius_max: int = 18
-    marker_stroke_ratio: float = 0.24
-    marker_stroke_min: int = 2
-    marker_stroke_max: int = 5
-
-    # outline 样式：更紧的环、更细的描边、更窄的高光、更短的引线。
+    # 更紧的环、更细的描边、更窄的高光、更短的引线。
     outline_radius_ratio: float = 0.014
     outline_radius_min: int = 5
     outline_radius_max: int = 14
@@ -123,19 +111,12 @@ class CropConfig:
             size = getattr(self, name)
             if isinstance(size, bool) or not isinstance(size, int) or size < 1:
                 raise ValueError(f"{name} must be a positive integer")
-        if self.marker_style not in MARKER_STYLES:
-            raise ValueError(f"marker_style must be one of {MARKER_STYLES}")
-        for prefix in ("marker", "outline"):
-            if not 0 < getattr(self, f"{prefix}_radius_ratio") <= 0.5:
-                raise ValueError(f"{prefix}_radius_ratio must be in (0, 0.5]")
-        if not 1 <= self.marker_radius_min <= self.marker_radius_max:
-            raise ValueError("invalid marker radius bounds")
+        if not 0 < self.outline_radius_ratio <= 0.5:
+            raise ValueError("outline_radius_ratio must be in (0, 0.5]")
         if not 1 <= self.outline_radius_min <= self.outline_radius_max:
             raise ValueError("invalid outline radius bounds")
-        if not 0 < self.marker_stroke_ratio <= 1 or not 0 < self.outline_stroke_ratio <= 1:
-            raise ValueError("marker_stroke_ratio must be in (0, 1]")
-        if not 1 <= self.marker_stroke_min <= self.marker_stroke_max:
-            raise ValueError("invalid marker stroke bounds")
+        if not 0 < self.outline_stroke_ratio <= 1:
+            raise ValueError("outline_stroke_ratio must be in (0, 1]")
         if not 1 <= self.outline_stroke_min <= self.outline_stroke_max:
             raise ValueError("invalid outline stroke bounds")
         if self.outline_leader_gap < 0:
@@ -161,6 +142,14 @@ class CropBox:
     def as_tuple(self) -> tuple[int, int, int, int]:
         return self.left, self.top, self.right, self.bottom
 
+    @property
+    def width(self) -> int:
+        return self.right - self.left
+
+    @property
+    def height(self) -> int:
+        return self.bottom - self.top
+
 
 @dataclass(frozen=True, slots=True)
 class CropMetadata:
@@ -185,7 +174,6 @@ class CropMetadata:
     full_output_size: tuple[int, int]
     fine_output_size: tuple[int, int]
     context_output_size: tuple[int, int]
-    marker_style: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,7 +334,7 @@ class AdaptiveCropper:
 
         marker_point = _point_in_output(clamped_point, context_box, context_image.size)
         # marker 只画在 Full 和 Context 上；Fine 保持干净，供模型观察细节。
-        context_image = _draw_target_marker(context_image, marker_point, self.config)
+        context_image = _draw_outline_marker(context_image, marker_point, self.config)
         # Full 单独缩放；Fine/Context 仍由原图裁剪。缩放后再映射点、绘制 marker。
         full_image = _resize_full_output(
             image, self.config.full_short_side, self.config.full_max_size,
@@ -355,7 +343,7 @@ class AdaptiveCropper:
             clamped_point, CropBox(0, 0, width, height), full_image.size,
         )
         # Full 与 Context 使用同一套样式，仅按各自输出尺寸选择 marker 大小。
-        full_image = _draw_target_marker(
+        full_image = _draw_outline_marker(
             full_image,
             full_point,
             self.config,
@@ -384,7 +372,6 @@ class AdaptiveCropper:
             full_output_size=full_image.size,
             fine_output_size=fine_image.size,
             context_output_size=context_image.size,
-            marker_style=self.config.marker_style,
         )
         return AdaptiveCrops(full_image, context_image, fine_image, metadata)
 
@@ -496,72 +483,6 @@ def _point_in_output(
 # ============================================================
 # 四、目标标记
 # ============================================================
-def _draw_target_marker(
-        image: Image.Image,
-        point: tuple[int, int],
-        config: CropConfig,
-        radius_ratio: float | None = None,
-        radius_min: int | None = None,
-        radius_max: int | None = None,
-) -> Image.Image:
-    # 使用独立 RGBA overlay，alpha 合成后返回 RGB，兼容后续 JPEG 编码。
-    if config.marker_style == "outline":
-        return _draw_outline_marker(image, point, config, radius_ratio, radius_min, radius_max)
-    return _draw_ring_marker(image, point, config, radius_ratio, radius_min, radius_max)
-
-
-def _draw_ring_marker(
-        image: Image.Image,
-        point: tuple[int, int],
-        config: CropConfig,
-        radius_ratio: float | None = None,
-        radius_min: int | None = None,
-        radius_max: int | None = None,
-) -> Image.Image:
-    """ring 样式：轮廓环 + 较宽白色高光 + 环外四根引线。"""
-    marked_image = image.convert("RGBA")
-    overlay = Image.new("RGBA", marked_image.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    shorter_side = min(marked_image.size)
-    radius = _clamp_int(
-        _round_half_up(shorter_side * (radius_ratio or config.marker_radius_ratio)),
-        radius_min or config.marker_radius_min,
-        radius_max or config.marker_radius_max,
-    )
-    stroke = _clamp_int(
-        _round_half_up(radius * config.marker_stroke_ratio),
-        config.marker_stroke_min,
-        config.marker_stroke_max,
-    )
-    center_x, center_y = point
-    ring_box = (
-        center_x - radius,
-        center_y - radius,
-        center_x + radius,
-        center_y + radius,
-    )
-
-    halo_width = max(3, min(config.marker_stroke_max + 2, radius // 2))
-    draw.ellipse(ring_box, outline=config.marker_halo_color, width=halo_width)
-    draw.ellipse(ring_box, outline=config.marker_color, width=stroke)
-
-    arm_gap = radius + max(2, stroke)
-    arm_end = arm_gap + max(4, radius // 2)
-    halo_lines = [
-        (center_x - arm_end, center_y, center_x - arm_gap, center_y),
-        (center_x + arm_gap, center_y, center_x + arm_end, center_y),
-        (center_x, center_y - arm_end, center_x, center_y - arm_gap),
-        (center_x, center_y + arm_gap, center_x, center_y + arm_end),
-    ]
-    for line in halo_lines:
-        draw.line(line, fill=config.marker_halo_color, width=halo_width)
-    for line in halo_lines:
-        draw.line(line, fill=config.marker_color, width=stroke)
-
-    return Image.alpha_composite(marked_image, overlay).convert("RGB")
-
-
 def _draw_outline_marker(
         image: Image.Image,
         point: tuple[int, int],
@@ -570,10 +491,9 @@ def _draw_outline_marker(
         radius_min: int | None = None,
         radius_max: int | None = None,
 ) -> Image.Image:
-    """收紧版标记：更小的环、更细的描边、与描边同宽的窄高光、更短的引线。
+    """在目标点上画小环、窄高光和短引线，尽量少遮挡判定像素。
 
-    标注只有一个点，无法得到目标真实轮廓；这里的目标是**减少覆盖**——ring 样式那圈
-    较宽的白色高光会正好压在密集场景里小目标的边界上。
+    使用独立 RGBA overlay，alpha 合成后返回 RGB，兼容后续 JPEG 编码。
     """
     marked_image = image.convert("RGBA")
     overlay = Image.new("RGBA", marked_image.size, (0, 0, 0, 0))
@@ -656,7 +576,7 @@ def _clamp_int(value: int, lower: int, upper: int) -> int:
 
 
 # ============================================================
-# 六、直接运行脚本时，随机生成 10 组裁剪可视化结果（含两种标记样式对照）
+# 六、直接运行脚本时，生成前 10 个实例的裁剪可视化结果
 # ============================================================
 def _fit_to_visualization_panel(image: Image.Image, panel_size: int) -> Image.Image:
     """等比例缩放图片并居中放入正方形画布，避免拉伸原图。"""
@@ -700,8 +620,8 @@ def _compose_crop_visualization(
     return canvas
 
 
-def _visualize_random_samples(sample_count: int = 10) -> None:
-    """从 instance_data.jsonl 随机抽样，把三视图拼图存到 ./tmp 供人工查看。"""
+def _visualize_samples(sample_count: int = 10) -> None:
+    """取 instance_data.jsonl 的前 N 个实例，把三视图拼图存到 ./tmp 供人工查看。"""
     import json
     from pathlib import Path
 
@@ -717,9 +637,11 @@ def _visualize_random_samples(sample_count: int = 10) -> None:
     if not instance_data:
         raise ValueError(f"实例标注为空: {instance_path}")
 
-    # 密度必须由全量点构建；随机抽样只决定可视化哪些实例。
     cropper = AdaptiveCropper.from_instances(instance_data, crop_config())
+
+    # 密度必须由全量点构建；随机抽样只决定可视化哪些实例。
     # samples = random.sample(instance_data, k=min(sample_count, len(instance_data)))
+    # 密度必须由全量点构建；按顺序取样只决定可视化哪些实例。
     samples = instance_data[:sample_count]
 
     for sample_index, instance in enumerate(samples, start=1):
@@ -745,4 +667,4 @@ def _visualize_random_samples(sample_count: int = 10) -> None:
 
 
 if __name__ == "__main__":
-    _visualize_random_samples(sample_count=10)
+    _visualize_samples(sample_count=10)

@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from recsub.extract import file_digest
 from recsub.io import (
     iter_jsonl, read_run_fingerprint, run_marker_path, write_json_atomic, write_run_fingerprint,
 )
@@ -18,14 +19,6 @@ BATCH_MANIFEST_NAME = "review_batch.json"
 SCHEMA_VERSION = 1
 TASK_FILES = {"review_items": "review_items.jsonl", "state": "review_state.jsonl",
               "final_output": "final_subsets.jsonl"}
-
-
-def sha256_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def canonical_json(value: Any) -> bytes:
@@ -115,7 +108,7 @@ def prepare_review_tasks(
     try:
         source_dir = temporary / ".source"
         source_items, source_csv = write_artifacts(ordered_items, source_dir)
-        items_sha256 = sha256_file(source_items)
+        items_sha256 = file_digest(source_items)
         tasks = []
         for number in range(task_count):
             task_id = f"review_{number + 1:02d}"
@@ -180,7 +173,7 @@ def load_and_validate_task(task_dir: str | Path) -> tuple[list[dict], dict[str, 
         if manifest[key] != name:
             raise ValueError(f"审核任务 manifest 的 {key} 必须为 {name}")
     paths = task_paths(task_dir)
-    actual_hash = sha256_file(paths["review_items"])
+    actual_hash = file_digest(paths["review_items"])
     if actual_hash != manifest["items_sha256"]:
         raise ValueError("审核清单版本校验失败：review_items.jsonl 已被修改或不是同一批次")
     items = list(iter_jsonl(paths["review_items"]))

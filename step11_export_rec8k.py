@@ -24,7 +24,7 @@ from recsub.io import write_json_atomic
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="导出独立 REC-8K 子集标注，保留根 caption 来源")
     parser.add_argument("--annotations", type=Path, default=path("annotations"),
-                        help="原标注；与 annotations_format.json 格式相同")
+                        help="原始 annotations.json")
     parser.add_argument("--splits", type=Path, default=path("splits"),
                         help="原始 train/val/test 划分，仅用于只读校验，不输出新划分")
     parser.add_argument("--subsets", type=Path, default=path("caption_subsets"),

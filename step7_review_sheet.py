@@ -355,7 +355,7 @@ class ReviewHandler(http.server.BaseHTTPRequestHandler):
     def state(self) -> dict[str, Any]:
         return self.server.state  # type: ignore[attr-defined]
 
-    def log_message(self, format: str, *args: Any) -> None:
+    def log_message(self, _format: str, *_args: Any) -> None:
         return
 
     def send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:

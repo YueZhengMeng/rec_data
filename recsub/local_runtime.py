@@ -8,7 +8,7 @@ import torch
 
 
 def create_accelerator():
-    """Create the bf16 Accelerator used by both local pipeline steps."""
+    """创建本地流水线共用的 bf16 Accelerator。"""
     try:
         from accelerate import Accelerator
     except ImportError as error:  # pragma: no cover - exercised in real launch
@@ -39,11 +39,10 @@ def validate_device(accelerator) -> None:
 
 
 def validate_runtime(accelerator, per_rank_batch_size: int) -> None:
-    """Validate and report rank/device semantics before loading a model.
+    """在加载模型前校验并报告 rank/设备语义。
 
-    The local scripts deliberately implement inference data parallelism themselves:
-    each rank owns one model replica and ``per_rank_batch_size`` examples.  The
-    model must not be passed to ``Accelerator.prepare``/DDP afterwards.
+    本地脚本自行实现推理数据并行：每个 rank 持有一份完整模型副本和
+    ``per_rank_batch_size`` 条样本；模型不能交给 ``Accelerator.prepare``/DDP。
     """
     if per_rank_batch_size < 1:
         raise ValueError("batch-size 必须 ≥1")
@@ -68,7 +67,7 @@ def validate_runtime(accelerator, per_rank_batch_size: int) -> None:
 
 
 def ordered_records(batch: list[dict], gathered: list[dict], failure_factory) -> list[dict]:
-    """Restore batch order and synthesize one failure row per missing ID."""
+    """恢复 batch 顺序，并为每个缺失 ID 生成一条失败记录。"""
     expected = {item["instance_id"] for item in batch}
     by_id: dict[Any, dict] = {}
     duplicate_ids: set[Any] = set()

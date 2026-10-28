@@ -36,6 +36,9 @@ step9_compose_captions_online.py    原属性 + 新划分属性 → 新短语/ca
 step9_compose_captions_local.py     同一套纯文本 prompt 的本地 Qwen 后端
 step10_review_captions.py           历史候选人工选用 / 编辑属性短语并确认 yes
 step11_export_rec8k.py              仅导出独立子集标注（带 root_caption），不写划分文件
+step12_review_overlaps.py           本地浏览器审核互补子集中的共享坐标，仅保存审核状态
+step12_apply_overlap_reviews.py     应用已确认共享点并仅去重 annotations_subset.json（默认 dry-run）
+step13_final_audit.py               最终审计与报告；可选删除未通过等价门禁的互补 pair
 ```
 
 共享实现位于 `recsub/`；根目录的 `fix_jsonl_format.py` 用于修复外部 JSON/JSONL
@@ -55,6 +58,23 @@ python fix_jsonl_format.py anno --dry-run       # 只统计指定目录，不写
 失败记录分离脚本 `step3_split_failed_extractions.py`、`step5_split_failed_judgments.py` 和
 `step9_split_failed_captions.py` 会原子地把待重跑记录移出成功结果；
 `step4_normalize_predicates_parallel.py` 提供按图片分片的多 GPU 归一化入口。
+
+## 环境与依赖
+
+需要 Python 3.10 或更高版本。核心依赖（在线路径与数据处理）：
+
+```bash
+pip install -r requirements.txt
+```
+
+- `openai`：在线 Chat Completions 调用；
+- `Pillow`：三视图裁剪、标记与图片编码；
+- `tqdm`：在线 batch 进度。
+
+本地 Qwen 后端额外需要 `torch`、`transformers`、`accelerate`、`peft` 和
+`bitsandbytes`，并准备对应的模型权重；`--model-mode nf4` 还需要可用的 CUDA GPU。
+嵌入匹配需要 `Qwen3-Embedding` 权重，并在 `REC_EMBEDDING_MODEL`（或
+`CONFIG["normalize"]["embedding_model"]`）中指定本地目录。
 
 ## 首次准备
 
@@ -110,6 +130,11 @@ REC_PROVIDER=deepseek  → DeepSeek / deepseek-flash
 | `captions_online` / `_local`             | `anno/subset_captions.jsonl` / `anno/subset_captions_local.jsonl`           | step9 合成文本与检查结果            |
 | `review_subset_decisions`                | `anno/review_subset_decisions_log.jsonl`                                    | step8 门禁拒绝与末行汇总            |
 | `annotations_subset`                     | `anno/annotations_subset.json`                                              | step11 独立导出标注                 |
+
+step12/step13 使用脚本内的独立默认路径：审核状态在 `review/overlaps/`，应用报告为
+`anno/step12_apply_overlap_report.json`，最终审计报告为
+`anno/step13_final_audit_report.json`；step12 可用 `--review-dir`、`--report` 覆盖，
+step13 可用 `--report` 覆盖。
 
 ### 在线采样默认值
 
@@ -206,7 +231,7 @@ python step2_build_vocabulary.py --split train \
 }
 ```
 
-重新运行 step2 即可。`attribute_vocabulary_all.md` 是人工浏览版本；训练词表对应
+重新运行 step2 即可。`attribute_vocabulary_all.md` 是人工浏览用词表；训练词表对应
 `attribute_vocabulary_train.md`。
 
 ### 3. 开放式提取（在线／本地）
@@ -307,7 +332,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --multi_gpu --num_process
 指标分别保存在 `generation_usage` 与 `review_usage` 中：
 
 ```json
-{"input_tokens": 1119, "output_tokens": 98, "average_confidence": 0.778, "ppl": 1.495}
+{
+  "input_tokens": 1119,
+  "output_tokens": 98,
+  "average_confidence": 0.778,
+  "ppl": 1.495
+}
 ```
 
 - `input_tokens`：每条输入 attention mask 的有效 token 数（包括图像占位/模板，不含 batch PAD）。
@@ -326,7 +356,21 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --multi_gpu --num_process
 在线结果保存 API 提供的 token 用量。step3 本地成功记录示例：
 
 ```json
-{"instance_id": 0, "image_name": "...", "caption": "person standing", "category": "person", "attributes": {"appearance": ["blue coat"]}, "input_tokens": 1119, "output_tokens": 98, "average_confidence": 0.778, "ppl": 1.495}
+{
+  "instance_id": 0,
+  "image_name": "...",
+  "caption": "person standing",
+  "category": "person",
+  "attributes": {
+    "appearance": [
+      "blue coat"
+    ]
+  },
+  "input_tokens": 1119,
+  "output_tokens": 98,
+  "average_confidence": 0.778,
+  "ppl": 1.495
+}
 ```
 
 `--no-enable-thinking` 用于实测成本/质量消融，不预设关闭后一定更好。抽样清单、prompt 预览
@@ -405,11 +449,25 @@ python step4_normalize_predicates.py --input anno/extract_result_local.jsonl \
   "category": "person",
   "parent_predicate_id": "person/action/walking",
   "candidates": {
-    "same_category_similar": [{"predicate_id": "person/action/sitting", "display": "sitting", "dimension": "action", "value": "sitting"}],
+    "same_category_similar": [
+      {
+        "predicate_id": "person/action/sitting",
+        "display": "sitting",
+        "dimension": "action",
+        "value": "sitting"
+      }
+    ],
     "cross_category_similar": [],
     "same_category_dissimilar": []
   },
-  "dropped": [{"predicate_id": "person/color/blue", "phrase": "blue", "reason": "cross_caption_string_duplicate", "detail": "'blue person' 的属性 'blue'"}]
+  "dropped": [
+    {
+      "predicate_id": "person/color/blue",
+      "phrase": "blue",
+      "reason": "cross_caption_string_duplicate",
+      "detail": "'blue person' 的属性 'blue'"
+    }
+  ]
 }
 ```
 
@@ -837,6 +895,46 @@ python step11_export_rec8k.py --overwrite
 ```
 
 可用 `--annotations-output` 指定标注输出路径；不能指向任意输入文件。
+
+### 12. 互补子集共享坐标人工审核与应用
+
+同一坐标可能在互补 yes/no 两侧同时出现。浏览器工具只展示正集 caption 和共享点选择，负集 caption
+不要求审核。正侧独有点显示红叉，负侧独有点显示绿点，共享点显示蓝色方框。选择为 yes 的共享点进入正集；未选择的点只有点击“确认并下一对”后才归入
+no。未确认或仅保存草稿绝不会按 no 导出。
+
+```bash
+# 1. 启动本地审核；只写 review/overlaps/review_state.jsonl
+python step12_review_overlaps.py
+
+# 2. 审核完成后先预览；默认 dry-run，不写 annotations_subset.json
+python step12_apply_overlap_reviews.py --dry-run
+
+# 3. 确认预览后，生成 backup 并只写回 annotations_subset.json
+python step12_apply_overlap_reviews.py --apply
+```
+
+默认绑定 `127.0.0.1:8768`。审核状态保存在 `review/overlaps/`；输入标注或子集文件变化时，
+manifest 指纹不匹配会拒绝沿用既有审核状态。apply 阶段只修改
+`anno/annotations_subset.json` 的 points，并对该文件每个 caption 的精确坐标稳定去重；
+`anno/annotations.json` 始终只读。apply 默认备份到 `anno/annotations_subset.json.bak`，
+已有备份时拒绝覆盖；审核结果已应用、当前没有共享坐标对时报告 `no_op`，不会重复改写。
+
+### 13. 最终审计
+
+step13 默认只读审计输入、仅写报告到 `anno/step13_final_audit_report.json`：重复坐标、
+互补 pair 覆盖与共享点、等价 step8 门禁（G1/G4/G5）、同图同文本不同点集等。
+
+```bash
+# 只审计并写报告
+python step13_final_audit.py
+
+# 可选：删除未通过等价门禁的正/负互补 pair
+python step13_final_audit.py --apply
+```
+
+`--apply` 在确有删除时先备份 `anno/annotations_subset.json`，再删除未通过等价门禁的
+正/负互补 pair；没有失败 pair 时报告 `no_op`、不改写文件。它不会删除文本冲突记录，
+也不会修改原始 `annotations.json`。
 
 ## 重要边界
 

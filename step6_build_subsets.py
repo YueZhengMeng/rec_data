@@ -182,15 +182,8 @@ def run(args: argparse.Namespace) -> int:
         stats["selected_nodes"] += len(selected_nodes)
         stats["rejected_proposals"] += len(root_rejected)
 
-    def node_records():
-        yield from nodes
-
-    def rejected_records():
-        for item in rejected:
-            yield item
-
-    write_jsonl_atomic(args.output, node_records())
-    write_jsonl_atomic(args.decisions, rejected_records())
+    write_jsonl_atomic(args.output, nodes)
+    write_jsonl_atomic(args.decisions, rejected)
 
     print(f"✅ 子集构建：{stats['roots']} 个根，{stats['source_instances']} 个实例")
     print(f"   通过节点（含 complement）：{stats['selected_nodes']}；"

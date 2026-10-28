@@ -184,10 +184,8 @@ CONFIG: dict[str, Any] = {
         # 局部裁剪仍基于原图，不损失 Fine/Context 的原始细节。
         "full_short_side": 800,
         "full_max_size": 1333,
-        # outline：更小的环、更细的描边、更窄的高光、更短的引线，尽量少覆盖判定要看
-        # 的像素（标注只给一个点，无法沿物体描边，能做的只是少遮挡）。
-        # ring 是另一套标记样式：更大的环、更宽的白色高光、更长的引线。
-        "marker_style": "outline",
+        # 更小的环、更细的描边、更窄的高光、更短的引线，尽量少覆盖判定要看的像素
+        # （标注只给一个点，无法沿物体描边，能做的只是少遮挡）。
         "outline_radius_ratio": 0.014,
         "marker_color": (255, 32, 32, 235),
         "marker_halo_color": (255, 255, 255, 245),

@@ -65,8 +65,8 @@ def extracted_attributes(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
     step3 的记录把提取结果直接放在 ``attributes`` 里；只带 ``instance_id`` 的记录
     把原始标注串放在那里，模型输出放在 ``more_attributes`` 里，因此两者都要看。
     """
-    for field in ("more_attributes", "attributes"):
-        value = record.get(field)
+    for name in ("more_attributes", "attributes"):
+        value = record.get(name)
         if isinstance(value, Mapping):
             return value
     return None

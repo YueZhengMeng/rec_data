@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Sequence
 
 from recsub.config import path
+from recsub.console import configure_console
 from recsub.io import ensure_parent, iter_jsonl
 
 
@@ -70,6 +71,7 @@ def split_failures(input_path: Path, failed_path: Path) -> tuple[int, int]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_console()
     args = parse_args(argv)
     failed_output = args.failed_output or args.input.with_name(
         f"{args.input.stem}_failed{args.input.suffix or '.jsonl'}"
